@@ -1,0 +1,49 @@
+name: ci-backend
+on:
+  push:
+    branches: [main]
+    paths: ["backend/**", ".github/workflows/ci-backend.yml"]
+  pull_request:
+    paths: ["backend/**", ".github/workflows/ci-backend.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+      DATABASE_POOLER_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+      REDIS_URL: redis://localhost:6379
+      TEST_REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: System deps (LibreOffice + WeasyPrint)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-calc libreoffice-core \
+            libpango-1.0-0 libpangoft2-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
+            libharfbuzz-subset0 fonts-liberation fonts-dejavu-core shared-mime-info
+      - name: Install
+        run: uv venv -p 3.13 .venv && uv pip install -p .venv -e '.[dev]'
+      - name: Lint
+        run: .venv/bin/ruff check . && .venv/bin/ruff format --check .
+      - name: Test
+        run: .venv/bin/pytest --cov=app --cov-report=term-missing
