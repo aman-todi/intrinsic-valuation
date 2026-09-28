@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens (shadcn/ui-style). Light by default, dark via prefers-color-scheme.
+ * Components only reference the semantic names below (bg-card, text-muted-foreground, ...).
+ */
+:root {
+  --background: #f7f8fa;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --border: #e2e8f0;
+  --input: #cbd5e1;
+  --ring: #2563eb;
+  --primary: #1d4ed8;
+  --primary-foreground: #ffffff;
+  --secondary: #eef2f7;
+  --secondary-foreground: #0f172a;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --positive: #15803d;
+  --negative: #b91c1c;
+  --warning: #b45309;
+  --warning-bg: #fffbeb;
+  --overlay: rgb(15 23 42 / 0.55);
+  --chart-1: #2563eb;
+  --chart-2: #0891b2;
+  --chart-3: #7c3aed;
+  --chart-pos: #16a34a;
+  --chart-neg: #dc2626;
+  --chart-total: #334155;
+  --div-pos: #2563eb;
+  --div-neg: #dc2626;
+  --div-mid: #f0efec;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b1020;
+    --foreground: #e2e8f0;
+    --card: #111831;
+    --card-foreground: #e2e8f0;
+    --muted: #1a2340;
+    --muted-foreground: #94a3b8;
+    --border: #243056;
+    --input: #334170;
+    --ring: #60a5fa;
+    --primary: #3b82f6;
+    --primary-foreground: #ffffff;
+    --secondary: #1a2340;
+    --secondary-foreground: #e2e8f0;
+    --destructive: #ef4444;
+    --destructive-foreground: #ffffff;
+    --positive: #4ade80;
+    --negative: #f87171;
+    --warning: #fbbf24;
+    --warning-bg: #2a2110;
+    --overlay: rgb(2 6 23 / 0.7);
+    --chart-1: #60a5fa;
+    --chart-2: #22d3ee;
+    --chart-3: #a78bfa;
+    --chart-pos: #4ade80;
+    --chart-neg: #f87171;
+    --chart-total: #cbd5e1;
+    --div-pos: #3b82f6;
+    --div-neg: #ef4444;
+    --div-mid: #383835;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-positive: var(--positive);
+  --color-negative: var(--negative);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-feature-settings: "tnum" 1;
+}
+
+* {
+  border-color: var(--border);
+}
+
+[inert] {
+  user-select: none;
+}
