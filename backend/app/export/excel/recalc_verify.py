@@ -116,7 +116,9 @@ async def recalc_file(xlsx_path: str | Path, out_dir: str | Path, timeout: float
             raise
         out = Path(out_dir) / (src.stem + ".xlsx")
         if proc.returncode != 0 or not out.is_file():
-            detail = (stderr or b"").decode(errors="replace").strip() or (stdout or b"").decode(errors="replace")
+            detail = (stderr or b"").decode(errors="replace").strip() or (stdout or b"").decode(
+                errors="replace"
+            )
             raise ExcelRecalcError(f"soffice conversion failed (exit {proc.returncode}): {detail[:500]}")
         return out
     finally:

@@ -24,7 +24,9 @@ class ExcelCase:
     window: int = 5
 
     def compute(self) -> ValuationResult:
-        return get_valuator(self.model_type).compute(self.financials, self.market, self.assumptions, self.window)
+        return get_valuator(self.model_type).compute(
+            self.financials, self.market, self.assumptions, self.window
+        )
 
 
 def _sotp_co() -> NormalizedFinancials:
@@ -43,7 +45,9 @@ def _sotp_assumptions():
             ef.sotp_segment(
                 "Industrial",
                 "fcff",
-                fcff=ef.fcff_assumptions(growth=(0.06, 0.05, 0.05, 0.04, 0.035), target_margin=0.17, kd=0.055),
+                fcff=ef.fcff_assumptions(
+                    growth=(0.06, 0.05, 0.05, 0.04, 0.035), target_margin=0.17, kd=0.055
+                ),
             ),
             ef.sotp_segment("Services", "ev_ebitda_multiple", multiple=9.5),
             ef.sotp_segment("Software", "ev_ebitda_multiple", multiple=14.0, ebitda_margin=0.28),
@@ -67,7 +71,11 @@ CASES: dict[str, Callable[[], ExcelCase]] = {
         ef.high_growth_co(),
         ef.market("GRWT", 12.0),
         ef.fcff_assumptions(
-            growth=(0.25, 0.20, 0.15, 0.12, 0.10), target_margin=0.22, convergence_years=6.5, s2c=1.8, beta=1.3
+            growth=(0.25, 0.20, 0.15, 0.12, 0.10),
+            target_margin=0.22,
+            convergence_years=6.5,
+            s2c=1.8,
+            beta=1.3,
         ),
     ),
     "fcff_early_stage_survival": lambda: ExcelCase(
@@ -105,7 +113,11 @@ CASES: dict[str, Callable[[], ExcelCase]] = {
         alt.excess_return_assumptions(roes=(0.13, 0.125, 0.12, 0.118, 0.115), terminal_roe=0.112),
     ),
     "nav_reit": lambda: ExcelCase(
-        "nav_reit", "nav_reit", alt.reit_financials(), alt.market("REIT", 150.0), alt.reit_assumptions(cap=0.055, g=0.025)
+        "nav_reit",
+        "nav_reit",
+        alt.reit_financials(),
+        alt.market("REIT", 150.0),
+        alt.reit_assumptions(cap=0.055, g=0.025),
     ),
     "nav_ep": lambda: ExcelCase(
         "nav_ep",
