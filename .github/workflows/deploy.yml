@@ -1,0 +1,78 @@
+name: deploy
+# Build + push images to ECR, run migrations, roll the ECS services (spec §14.7, Ticket 15).
+# Disabled until the repo variable DEPLOY_ENABLED is 'true' (set it after bootstrap_aws.sh and
+# put_ssm_params.sh have been run and the AWS_ROLE_ARN secret exists) so pushes to main stay green
+# before AWS is provisioned. The frontend is deployed by Vercel's own Git integration, not here.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  skipped:
+    if: ${{ vars.DEPLOY_ENABLED != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployment not enabled
+        run: >-
+          echo "::notice title=Deploy skipped::AWS deploy is disabled. After running
+          infra/scripts/bootstrap_aws.sh + put_ssm_params.sh, add the AWS_ROLE_ARN secret and set the
+          repository variable DEPLOY_ENABLED=true (see docs/DEPLOYMENT.md)."
+
+  deploy:
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write # OIDC -> AWS
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      S3_BUCKET_NAME: ${{ vars.S3_BUCKET_NAME }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
+      SEC_EDGAR_USER_AGENT: ${{ vars.SEC_EDGAR_USER_AGENT }}
+      ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL || 'claude-sonnet-5' }}
+      USE_FARGATE_SPOT: ${{ vars.USE_FARGATE_SPOT || 'false' }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required configuration
+        env:
+          HAS_ROLE: ${{ secrets.AWS_ROLE_ARN != '' }}
+        run: |
+          missing=()
+          [ "$HAS_ROLE" = "true" ] || missing+=("secret AWS_ROLE_ARN")
+          [ -n "$SUPABASE_URL" ] || missing+=("variable SUPABASE_URL")
+          [ -n "$CORS_ORIGINS" ] || missing+=("variable CORS_ORIGINS")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error title=Deploy misconfigured::missing ${missing[*]} (Settings -> Secrets and variables -> Actions)"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: dcf-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy
+        run: infra/scripts/deploy.sh
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "### Deployed \`${IMAGE_TAG::12}\`"
+            echo "Images: \`dcf-api:${IMAGE_TAG}\`, \`dcf-worker:${IMAGE_TAG}\` in ${AWS_REGION}"
+          } >> "$GITHUB_STEP_SUMMARY"

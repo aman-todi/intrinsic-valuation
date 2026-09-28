@@ -1,0 +1,22 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-models-35d",
+      "Filter": { "Prefix": "models/" },
+      "Status": "Enabled",
+      "Expiration": { "Days": 35 }
+    },
+    {
+      "ID": "expire-runs-35d",
+      "Filter": { "Prefix": "runs/" },
+      "Status": "Enabled",
+      "Expiration": { "Days": 35 }
+    },
+    {
+      "ID": "abort-incomplete-multipart-7d",
+      "Filter": { "Prefix": "" },
+      "Status": "Enabled",
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}

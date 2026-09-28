@@ -1,0 +1,121 @@
+{
+  "family": "dcf-worker",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "${EXECUTION_ROLE_ARN}",
+  "taskRoleArn": "${TASK_ROLE_ARN}",
+  "containerDefinitions": [
+    {
+      "name": "worker",
+      "image": "${IMAGE_URI}",
+      "essential": true,
+      "environment": [
+        {
+          "name": "ANTHROPIC_MODEL",
+          "value": "${ANTHROPIC_MODEL}"
+        },
+        {
+          "name": "AWS_REGION",
+          "value": "${REGION}"
+        },
+        {
+          "name": "BUILD_LOCK_TTL_SECONDS",
+          "value": "120"
+        },
+        {
+          "name": "CACHE_EXPIRY_BACKSTOP_DAYS",
+          "value": "35"
+        },
+        {
+          "name": "CACHE_TTL_DAYS",
+          "value": "30"
+        },
+        {
+          "name": "DEV_AUTH_BYPASS",
+          "value": "false"
+        },
+        {
+          "name": "ENGINE_VERSION",
+          "value": "v1"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "PROMPT_VERSION",
+          "value": "v1"
+        },
+        {
+          "name": "REDIS_URL",
+          "value": "${REDIS_URL}"
+        },
+        {
+          "name": "S3_BUCKET_NAME",
+          "value": "${S3_BUCKET_NAME}"
+        },
+        {
+          "name": "SEC_EDGAR_USER_AGENT",
+          "value": "${SEC_EDGAR_USER_AGENT}"
+        },
+        {
+          "name": "STORAGE_BACKEND",
+          "value": "s3"
+        },
+        {
+          "name": "SUPABASE_URL",
+          "value": "${SUPABASE_URL}"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "SUPABASE_ANON_KEY",
+          "valueFrom": "arn:aws:ssm:${REGION}:${ACCOUNT_ID}:parameter${SSM_PREFIX}/SUPABASE_ANON_KEY"
+        },
+        {
+          "name": "SUPABASE_SERVICE_ROLE_KEY",
+          "valueFrom": "arn:aws:ssm:${REGION}:${ACCOUNT_ID}:parameter${SSM_PREFIX}/SUPABASE_SERVICE_ROLE_KEY"
+        },
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:ssm:${REGION}:${ACCOUNT_ID}:parameter${SSM_PREFIX}/DATABASE_URL"
+        },
+        {
+          "name": "DATABASE_POOLER_URL",
+          "valueFrom": "arn:aws:ssm:${REGION}:${ACCOUNT_ID}:parameter${SSM_PREFIX}/DATABASE_POOLER_URL"
+        },
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "valueFrom": "arn:aws:ssm:${REGION}:${ACCOUNT_ID}:parameter${SSM_PREFIX}/ANTHROPIC_API_KEY"
+        },
+        {
+          "name": "FRED_API_KEY",
+          "valueFrom": "arn:aws:ssm:${REGION}:${ACCOUNT_ID}:parameter${SSM_PREFIX}/FRED_API_KEY"
+        }
+      ],
+      "stopTimeout": 120,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "${LOG_GROUP}",
+          "awslogs-region": "${REGION}",
+          "awslogs-stream-prefix": "worker"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "key": "project",
+      "value": "dcf"
+    }
+  ]
+}
