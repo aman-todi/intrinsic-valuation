@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.classify.rules import DOMESTIC_FORMS
 from app.config import Settings, get_settings
+from app.data.demo import DEMO_DATA_FLAG, DEMO_RISK_FREE_RATE
 from app.data.edgar.client import EdgarClient, EdgarError, EdgarNotFound, TickerNotFoundError
 from app.data.edgar.normalize import (
     NormalizationError,
@@ -45,6 +46,7 @@ from app.storage import ArtifactStorage, tmp_prefix
 log = logging.getLogger(__name__)
 
 SEGMENT_FETCH_TIMEOUT_S = 60.0
+DEMO_ACCESSION_PREFIX = "DEMO-"
 GENERIC_FAILURE = "Something went wrong while processing this run. Please try again."
 
 
@@ -285,6 +287,11 @@ async def load_company(edgar: EdgarClient, ticker: str, *, with_segments: bool) 
         with_segments = False
     data_submissions = submissions
     extra: list[str] = []
+    if getattr(edgar, "demo_mode", False):
+        # Namespace the filing id so demo runs never share cache entries with live data for the same
+        # (synthetic) accession, and say loudly that this is not a real filing pull.
+        fin = fin.model_copy(update={"accession_number": f"{DEMO_ACCESSION_PREFIX}{fin.accession_number}"})
+        extra.append(DEMO_DATA_FLAG)
     if with_segments:
         segs, flag = await load_segments(edgar, cik, data_submissions)
         if segs:
@@ -331,6 +338,31 @@ async def load_market(deps: JobDeps, ticker: str, sic_code: str | None) -> Marke
     the run fails with a clear configuration message.
     """
     s = deps.settings
+    if s.DATA_SOURCE_MODE == "fixtures":
+        price, industry0, erp = await asyncio.gather(
+            deps.market_provider.get_price_snapshot(ticker),
+            damodaran.get_industry_data(sic_code),
+            damodaran.get_equity_risk_premium(),
+        )
+        snapshot = MarketSnapshot(
+            ticker=price.ticker,
+            price=price.price,
+            as_of=price.as_of,
+            shares_outstanding=price.shares_outstanding,
+            market_cap=price.market_cap,
+            risk_free_rate=DEMO_RISK_FREE_RATE,
+            industry_unlevered_beta=industry0.unlevered_beta,
+            equity_risk_premium=erp,
+        )
+        return MarketData(
+            snapshot=snapshot,
+            industry=industry0,
+            flags=[
+                DEMO_DATA_FLAG,
+                f"risk-free rate {DEMO_RISK_FREE_RATE:.2%} is a fixed demo value, not FRED DGS10; "
+                "price and share count are fixed demo values, not live quotes",
+            ],
+        )
     if s.FRED_API_KEY:
         snapshot = await build_market_snapshot(
             ticker, sic_code, deps.market_provider, deps.fred_client, fred_api_key=s.FRED_API_KEY

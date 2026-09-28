@@ -26,6 +26,7 @@ import redis.asyncio as redis_asyncio
 
 from app.assumptions.proposer import make_client
 from app.config import settings as app_settings
+from app.data.demo.providers import FixtureEdgarClient
 from app.data.edgar.client import EdgarClient
 from app.data.market.yfinance_provider import get_market_provider
 from app.db.base import dispose_engine, get_sessionmaker
@@ -46,9 +47,14 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["redis"] = redis
     ctx["sessionmaker"] = sessionmaker
     ctx["storage"] = storage
-    ctx["edgar_client"] = EdgarClient.from_settings(
-        redis, cache=StorageJsonCache(storage), index=DbFilingCacheIndex(sessionmaker)
-    )
+    if app_settings.DATA_SOURCE_MODE == "fixtures":
+        # Offline demo: SEC data from the bundled fixtures, fixed prices; runs are flagged DEMO DATA.
+        ctx["edgar_client"] = FixtureEdgarClient()
+        log.warning("DATA_SOURCE_MODE=fixtures: serving DEMO data (bundled EDGAR fixtures, fixed prices)")
+    else:
+        ctx["edgar_client"] = EdgarClient.from_settings(
+            redis, cache=StorageJsonCache(storage), index=DbFilingCacheIndex(sessionmaker)
+        )
     ctx["anthropic_client"] = make_client()
     ctx["market_provider"] = get_market_provider()
     ctx["fred_client"] = httpx.AsyncClient(timeout=10.0)

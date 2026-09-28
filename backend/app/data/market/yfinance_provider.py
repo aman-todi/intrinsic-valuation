@@ -79,5 +79,13 @@ class YFinanceProvider(MarketDataProvider):
 
 
 def get_market_provider() -> MarketDataProvider:
-    """Factory used by the run pipeline / API; tests inject their own provider instead."""
+    """Factory used by the run pipeline / API; tests inject their own provider instead.
+
+    ``DATA_SOURCE_MODE=fixtures`` (local demo) returns the deterministic offline provider."""
+    from app.config import get_settings
+
+    if get_settings().DATA_SOURCE_MODE == "fixtures":
+        from app.data.demo.providers import DemoMarketProvider
+
+        return DemoMarketProvider()
     return YFinanceProvider()

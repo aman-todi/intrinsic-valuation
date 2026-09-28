@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # Runs using it carry a data-confidence flag. Leave unset in any deployed environment.
     RISK_FREE_RATE_OVERRIDE: float | None = None
 
+    # Local dev / demos only: "fixtures" serves SEC EDGAR data from the bundled fixture set
+    # (app/data/demo/edgar), fixed per-ticker prices and a fixed risk-free rate, with no network calls
+    # to SEC / Yahoo / FRED. Every run is flagged "DEMO DATA". NEVER enable in a deployed environment.
+    DATA_SOURCE_MODE: Literal["live", "fixtures"] = "live"
+
     # Local dev only: accept "Bearer dev-bypass-token" (the frontend's no-Supabase mode) as a fixed
     # dev user. NEVER enable against a shared/production database.
     DEV_AUTH_BYPASS: bool = False

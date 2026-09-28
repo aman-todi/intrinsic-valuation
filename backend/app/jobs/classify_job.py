@@ -22,6 +22,7 @@ from uuid import UUID
 from app.assumptions.proposer import PROMPT_VERSION, propose_with_fallback
 from app.classify.llm_tiebreak import classify_with_tiebreak
 from app.classify.rules import ClassificationSignals, classify
+from app.data.demo import DEMO_DATA_FLAG
 from app.data.edgar.normalize import (
     entity_type,
     filer_forms,
@@ -191,7 +192,8 @@ async def _classify_body(deps: JobDeps, run_id: UUID, ticker: str) -> dict[str, 
         run.sic_code = signals.company.sic_code or None
         run.model_type = result.recommended_model.value if result.recommended_model else None
         run.model_confidence = Decimal(str(round(result.confidence, 3)))
-        run.model_reasons = list(result.reasons)
+        demo = [f"data flag: {DEMO_DATA_FLAG}"] if DEMO_DATA_FLAG in company.extra_flags else []
+        run.model_reasons = [*demo, *result.reasons]
         run.runner_up_model = result.runner_up.value if result.runner_up else None
         run.decline_reason = result.decline_reason.value if result.decline_reason else None
         run.historical_window_years = result.historical_window_years

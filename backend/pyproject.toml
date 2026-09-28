@@ -54,6 +54,7 @@ include = ["app*"]
 [tool.setuptools.package-data]
 "app.export.pdf" = ["templates/*.jinja"]
 "app.data.macro" = ["*.json"]
+"app.data.demo" = ["edgar/*.json", "edgar/*.xml", "edgar/*.htm"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

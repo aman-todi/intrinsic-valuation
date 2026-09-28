@@ -61,6 +61,8 @@ class _FixtureTransport:
 class FixtureEdgarClient(EdgarClient):
     """EdgarClient that never leaves the process: SEC responses come from the bundled fixtures."""
 
+    demo_mode = True  # load_company flags the data and namespaces the accession (cache keys)
+
     def __init__(self) -> None:
         self.transport = _FixtureTransport()
         super().__init__(

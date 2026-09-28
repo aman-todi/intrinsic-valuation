@@ -373,7 +373,11 @@ def _load_latest_sync(client: Any, bucket: str, dataset: str) -> dict[str, Any] 
 async def load_latest_dataset(
     dataset: str, *, s3_client: Any | None = None, bucket: str | None = None
 ) -> dict[str, Any] | None:
-    """Return the newest cached document for ``dataset`` or ``None`` (missing, or S3 unreachable)."""
+    """Return the newest cached document for ``dataset`` or ``None`` (missing, or S3 unreachable).
+
+    Offline demo mode (``DATA_SOURCE_MODE=fixtures``) never touches S3: the bundled snapshot is used."""
+    if s3_client is None and get_settings().DATA_SOURCE_MODE == "fixtures":
+        return None
     try:
         client = _s3_client(s3_client)
         return await asyncio.to_thread(_load_latest_sync, client, _bucket(bucket), dataset)

@@ -27,6 +27,7 @@ from uuid import UUID
 from app.assumptions.proposer import PROMPT_VERSION
 from app.classify.rules import is_early_stage
 from app.classify.windows import historical_window_years
+from app.data.demo import DEMO_DATA_FLAG
 from app.data.edgar.normalize import sic
 from app.db.models import CachedModel
 from app.export.pdf.builder import build_pdf
@@ -67,7 +68,9 @@ log = logging.getLogger(__name__)
 
 
 def _dedupe(items: list[str]) -> list[str]:
-    return list(dict.fromkeys(i for i in items if i))
+    """Order-preserving dedupe; the demo-data warning (if any) always comes first."""
+    unique = list(dict.fromkeys(i for i in items if i))
+    return sorted(unique, key=lambda i: i != DEMO_DATA_FLAG)
 
 
 class _RunView:
