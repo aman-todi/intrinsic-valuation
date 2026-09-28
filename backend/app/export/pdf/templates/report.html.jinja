@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ r.ticker }} — {{ model_label }} valuation</title>
+<style>
+  @page {
+    size: Letter;
+    margin: 20mm 18mm 20mm 18mm;
+    @top-left { content: "{{ header_left }}"; font-size: 7.5pt; color: #8a8883; }
+    @top-right { content: "{{ header_right }}"; font-size: 7.5pt; color: #8a8883; }
+    @bottom-left { content: "Not investment advice"; font-size: 7.5pt; color: #8a8883; }
+    @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 7.5pt; color: #8a8883; }
+  }
+  @page :first {
+    @top-left { content: none; } @top-right { content: none; }
+  }
+  :root { --ink: #0b0b0b; --ink-2: #52514e; --muted: #8a8883; --rule: #e4e2dd; --accent: #1c5cab;
+          --band: #f6f5f2; --pos: #1d6b3a; --neg: #b3312f; }
+  html { font-family: "Liberation Sans", "DejaVu Sans", Helvetica, Arial, sans-serif; font-size: 9.5pt;
+         color: var(--ink); line-height: 1.45; }
+  body { margin: 0; background: #fff; }
+  h1, h2, h3 { font-weight: 700; color: var(--ink); margin: 0; }
+  h2 { font-size: 14pt; margin: 0 0 3mm; padding-bottom: 1.5mm; border-bottom: 1.5pt solid var(--accent);
+       string-set: section content(); }
+  h3 { font-size: 10.5pt; margin: 5mm 0 2mm; color: var(--ink-2); }
+  p { margin: 0 0 2.5mm; }
+  section { page-break-before: always; }
+  section.flow { page-break-before: auto; margin-top: 8mm; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .muted { color: var(--muted); }
+  .small { font-size: 8pt; }
+  .pos { color: var(--pos); } .neg { color: var(--neg); }
+
+  /* Title page */
+  .title-page { height: 230mm; display: flex; flex-direction: column; }
+  .eyebrow { text-transform: uppercase; letter-spacing: 1.5pt; font-size: 8pt; color: var(--accent);
+             font-weight: 700; margin-top: 30mm; }
+  .title-page h1 { font-size: 30pt; line-height: 1.1; margin: 3mm 0 1mm; }
+  .title-page .ticker { font-size: 13pt; color: var(--ink-2); }
+  .hero { display: flex; gap: 6mm; margin: 12mm 0 8mm; }
+  .hero .tile { flex: 1; border-top: 2pt solid var(--ink); padding-top: 2.5mm; }
+  .hero .tile .label { font-size: 7.5pt; text-transform: uppercase; letter-spacing: .8pt; color: var(--ink-2); }
+  .hero .tile .value { font-size: 20pt; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 1mm; }
+  .why { background: var(--band); padding: 4mm 5mm; border-left: 2.5pt solid var(--accent); }
+  .why h3 { margin-top: 0; }
+  .meta { margin-top: auto; font-size: 8pt; color: var(--muted); }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 1mm 0 4mm; page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+  th { text-align: left; font-size: 7.5pt; text-transform: uppercase; letter-spacing: .5pt; color: var(--ink-2);
+       border-bottom: 1pt solid var(--ink); padding: 1.4mm 2mm; font-weight: 700; }
+  td { padding: 1.3mm 2mm; border-bottom: .5pt solid var(--rule); vertical-align: top; }
+  tr.total td { font-weight: 700; border-top: .8pt solid var(--ink-2); background: var(--band); }
+  table.assumptions td.rationale { color: var(--ink-2); font-size: 8pt; }
+  table.assumptions td.source { color: var(--muted); font-size: 7.5pt; white-space: nowrap; }
+  table.assumptions { table-layout: fixed; }
+  table.assumptions col.c-label { width: 29%; } table.assumptions col.c-value { width: 14%; }
+  table.assumptions col.c-rat { width: 39%; } table.assumptions col.c-src { width: 18%; }
+  table.assumptions td.source { white-space: normal; }
+  table.bridge { width: 70%; }
+  table.kv td:first-child { color: var(--ink-2); }
+
+  table.sens th, table.sens td { text-align: center; }
+  table.sens td { font-variant-numeric: tabular-nums; border: .5pt solid #fff; padding: 1.8mm 1mm; }
+  table.sens td.rowlabel { text-align: right; font-weight: 700; color: var(--ink-2); background: #fff;
+                           border-right: 1pt solid var(--ink); }
+  table.sens td.above { background: #dbe8f8; }
+  table.sens td.below { background: #f8dcd9; }
+  table.sens td.center { font-weight: 700; outline: 1.2pt solid var(--ink); }
+  .axis-note { font-size: 7.5pt; color: var(--muted); margin-bottom: 1mm; }
+
+  ul.drivers { margin: 1mm 0 3mm; padding-left: 5mm; }
+  ul.drivers li { margin-bottom: 1.5mm; }
+  figure { margin: 2mm 0 4mm; text-align: center; page-break-inside: avoid; }
+  figure img { max-width: 100%; }
+  figure.wide img { width: 100%; }
+  figcaption { font-size: 7.5pt; color: var(--muted); margin-top: 1mm; text-align: left; }
+  .flag { border-left: 2.5pt solid #c98500; background: #fdf6e7; padding: 2.5mm 4mm; margin: 2mm 0 3mm; }
+  .flag strong { color: #7a5200; }
+  ol.sources { padding-left: 5mm; font-size: 8pt; color: var(--ink-2); }
+  .disclaimer { font-size: 8pt; color: var(--ink-2); border: .6pt solid var(--rule); padding: 3mm 4mm; }
+  .keep { page-break-inside: avoid; }
+  .two-col { display: flex; gap: 6mm; }
+  .two-col > div { flex: 1; }
+</style>
+</head>
+<body>
+
+{# ---------------------------------------------------------------- 1. Title page #}
+<div class="title-page">
+  <div class="eyebrow">Intrinsic valuation report</div>
+  <h1>{{ company_name }}</h1>
+  <div class="ticker">{{ r.ticker }} · {{ model_label }}</div>
+
+  <div class="hero">
+    <div class="tile"><div class="label">Intrinsic value / share</div><div class="value">{{ r.value_per_share | per_share }}</div></div>
+    <div class="tile"><div class="label">Market price</div><div class="value">{{ r.market_price | per_share }}</div></div>
+    <div class="tile"><div class="label">Upside / downside</div>
+      <div class="value {{ 'pos' if r.upside_pct >= 0 else 'neg' }}">{{ r.upside_pct | pct(signed=True) }}</div></div>
+  </div>
+
+  <div class="why">
+    <h3>Why this model</h3>
+    <p>{{ n.why_this_model }}</p>
+    {% if model_reasons %}
+    <ul class="drivers small">
+      {% for reason in model_reasons %}<li>{{ reason }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+
+  <div class="meta">
+    Valuation date {{ r.run_date }} · Currency {{ r.currency }} · Engine {{ r.engine_version }} ·
+    SEC accession {{ r.accession_number }} · {{ r.historical_window_years }}-year historical window
+  </div>
+</div>
+
+{# ---------------------------------------------------------------- 2. Executive summary #}
+<section>
+  <h2>1. Executive summary</h2>
+  <p>{{ n.executive_summary }}</p>
+  <h3>Key drivers</h3>
+  <ul class="drivers">
+    {% for d in n.key_drivers %}<li>{{ d }}</li>{% endfor %}
+  </ul>
+  <div class="two-col">
+    <div>
+      <h3>Headline figures</h3>
+      <table class="kv">
+        <tr><td>Value per share</td><td class="num"><strong>{{ r.value_per_share | per_share }}</strong></td></tr>
+        <tr><td>Market price</td><td class="num">{{ r.market_price | per_share }}</td></tr>
+        <tr><td>Upside / downside</td><td class="num">{{ r.upside_pct | pct(signed=True) }}</td></tr>
+        <tr><td>Equity value</td><td class="num">{{ r.equity_value | money }}</td></tr>
+        {% if not equity_direct %}
+        <tr><td>Enterprise value</td><td class="num">{{ r.enterprise_value | money }}</td></tr>
+        {% endif %}
+        <tr><td>Diluted shares</td><td class="num">{{ r.diluted_shares | shares }}</td></tr>
+        {% if r.discount_rate is not none %}
+        <tr><td>{{ 'Cost of equity' if equity_direct else 'Discount rate' }}</td><td class="num">{{ r.discount_rate | pct(decimals=2) }}</td></tr>
+        {% endif %}
+        {% for label, value in implied %}
+        <tr><td>{{ label }}</td><td class="num">{{ value }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    <div>
+      {% if scenarios %}
+      <h3>Scenario range</h3>
+      <table class="kv">
+        {% for s in scenarios %}
+        <tr><td>{{ s.label | capitalize }}</td><td class="num">{{ s.value_per_share | per_share }}</td></tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+    </div>
+  </div>
+
+{# ---------------------------------------------------------------- 3. Business overview #}
+</section>
+<section class="flow">
+  <h2>2. Business and historical overview</h2>
+  <p>{{ n.business_overview }}</p>
+</section>
+
+{# ---------------------------------------------------------------- 4. Model mechanics #}
+<section>
+  <h2>3. Model mechanics</h2>
+  <p>This report uses the <strong>{{ model_label }}</strong>.
+  {% if r.model_type in ('fcff', 'fcfe') %}
+    Revenue is projected year by year from the growth assumptions below while margins converge toward
+    their target; reinvestment needed to fund that growth is deducted to arrive at free cash flow
+    {{ 'to the firm' if r.model_type == 'fcff' else 'to equity holders' }}. Each year's cash flow is
+    discounted at {{ 'the weighted average cost of capital' if r.model_type == 'fcff' else 'the cost of equity' }}{% if r.discount_rate is not none %} ({{ r.discount_rate | pct(decimals=2) }}){% endif %},
+    and a terminal value captures the cash flows beyond the explicit forecast, growing at the terminal
+    growth rate in perpetuity.
+  {% elif r.model_type == 'excess_return' %}
+    Equity value equals current book value plus the present value of expected excess returns — the
+    spread between return on equity and the cost of equity, applied to each year's book value.
+  {% elif r.model_type == 'nav_reit' %}
+    Net operating income is capitalized at the cap rate to value the property portfolio, other assets
+    are added and liabilities deducted to reach net asset value.
+  {% elif r.model_type == 'nav_ep' %}
+    Proved reserves are valued by discounting their projected production cash flows at the reserve
+    discount rate under the price deck below, net of development costs.
+  {% elif r.model_type == 'sotp' %}
+    Each segment is valued separately — with its own DCF or an EV/EBITDA multiple — and the segment
+    values are summed, less capitalized corporate overhead, before walking to equity value.
+  {% endif %}
+  All assumptions below are the resolved values used by the engine.</p>
+
+  {% for sec in assumption_sections %}
+  {% if sec.title %}<h3>{{ sec.title }}</h3>{% endif %}
+  <table class="assumptions">
+    <colgroup><col class="c-label"><col class="c-value"><col class="c-rat"><col class="c-src"></colgroup>
+    <thead><tr><th>Assumption</th><th class="num">Value</th><th>Rationale</th><th>Source</th></tr></thead>
+    <tbody>
+    {% for row in sec.rows %}
+      <tr><td>{{ row.label }}</td><td class="num value">{{ row.value }}</td>
+          <td class="rationale">{{ row.rationale }}</td><td class="source">{{ row.source }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No assumption detail was recorded for this run.</p>
+  {% endfor %}
+
+  {% if projection %}
+  <div class="keep">
+  <h3>Explicit forecast</h3>
+  <table>
+    <thead><tr><th>Year</th>{% for c in projection.columns %}<th class="num">{{ c }}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for row in projection.rows %}
+      <tr><td>{{ row.year }}</td>{% for cell in row.cells %}<td class="num">{{ cell }}</td>{% endfor %}</tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+
+{# ---------------------------------------------------------------- 5. Valuation walk #}
+<section>
+  <h2>4. Valuation walk</h2>
+  {% if equity_direct %}
+  <p>The {{ model_label }} values equity directly, so there is no operating-value-to-equity bridge:
+  equity value of {{ r.equity_value | money }} divided by {{ r.diluted_shares | shares }} diluted shares
+  gives {{ r.value_per_share | per_share }} per share.</p>
+  {% else %}
+  <p>From operating value to value per share: non-operating assets are added and claims senior to common
+  equity are deducted.</p>
+  {% endif %}
+  <figure class="wide">
+    <img src="data:image/png;base64,{{ charts.waterfall }}" alt="Value bridge waterfall">
+    <figcaption>Value bridge, {{ r.currency }}.</figcaption>
+  </figure>
+  {% if not equity_direct %}
+  <table class="bridge">
+    {% for row in bridge_rows %}
+    <tr class="{{ 'total' if row.total }}"><td>{{ row.label }}</td><td class="num">{{ row.value }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <table class="bridge">
+    <tr class="total"><td>Equity value</td><td class="num">{{ r.equity_value | money }}</td></tr>
+    <tr><td>÷ Diluted shares</td><td class="num">{{ r.diluted_shares | shares }}</td></tr>
+    <tr class="total"><td>Value per share</td><td class="num">{{ r.value_per_share | per_share }}</td></tr>
+  </table>
+  {% endif %}
+</section>
+
+{# ---------------------------------------------------------------- 6. Sensitivity #}
+<section>
+  <h2>5. Sensitivity</h2>
+  {% if sensitivity %}
+  <p>Value per share across the model's two most influential inputs. Shaded blue where the value is at
+  or above the current market price of {{ r.market_price | per_share }}, red where below; the outlined
+  cell is the base case.</p>
+  <div class="axis-note">Rows and columns: the two key levers of the {{ model_label }}.</div>
+  <table class="sens">
+    <thead><tr><th></th>{% for c in sensitivity.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for row in sensitivity.rows %}
+      <tr><td class="rowlabel">{{ row.label }}</td>
+      {% for cell in row.cells %}<td class="{{ cell.cls }}">{{ cell.text }}</td>{% endfor %}</tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if charts.heatmap %}
+  <figure>
+    <img src="data:image/png;base64,{{ charts.heatmap }}" alt="Sensitivity heatmap" style="width: 82%">
+  </figure>
+  {% endif %}
+  {% else %}
+  <p class="muted">No sensitivity grid was produced for this run.</p>
+  {% endif %}
+
+{# ---------------------------------------------------------------- 7. Scenarios #}
+</section>
+<section class="flow">
+  <h2>6. Scenarios</h2>
+  {% if scenarios %}
+  {% if charts.scenarios %}
+  <figure>
+    <img src="data:image/png;base64,{{ charts.scenarios }}" alt="Scenario values" style="width: 78%">
+    <figcaption>Value per share by scenario; dashed line is the market price.</figcaption>
+  </figure>
+  {% endif %}
+  <table>
+    <thead><tr><th>Scenario</th><th class="num">Value / share</th><th class="num">vs. market</th><th>Key assumption changes</th></tr></thead>
+    <tbody>
+    {% for s in scenarios %}
+      <tr><td>{{ s.label | capitalize }}</td>
+          <td class="num">{{ s.value_per_share | per_share }}</td>
+          <td class="num">{% if r.market_price > 0 %}{{ (s.value_per_share / r.market_price - 1) | pct(signed=True) }}{% else %}n/a{% endif %}</td>
+          <td class="small">{% for k, v in s.key_assumption_deltas.items() %}{{ k | humanize }} {{ fmt_delta(k, v) }}{{ ', ' if not loop.last }}{% else %}Base assumptions{% endfor %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No scenarios were produced for this run.</p>
+  {% endif %}
+</section>
+
+{# ---------------------------------------------------------------- 8. Limitations #}
+<section>
+  <h2>7. Limitations and disclaimers</h2>
+  {% if tv_high %}
+  <div class="flag"><strong>High terminal-value dependence.</strong> The terminal value represents
+  {{ tv_share | pct }} of {{ 'equity' if equity_direct else 'enterprise' }} value; small changes to long-run growth or the discount rate move
+  the result materially.</div>
+  {% elif tv_share is not none %}
+  <p>Terminal value represents {{ tv_share | pct }} of {{ 'equity' if equity_direct else 'enterprise' }} value.</p>
+  {% endif %}
+  {% if n.limitations_note %}<p>{{ n.limitations_note }}</p>{% endif %}
+
+  <h3>Data confidence flags</h3>
+  {% if r.data_confidence_flags %}
+  <ul class="drivers">
+    {% for f in r.data_confidence_flags %}<li>{{ f }}</li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No data-confidence issues were flagged.</p>
+  {% endif %}
+
+  <h3>Sources</h3>
+  {% if r.sources %}
+  <ol class="sources">
+    {% for s in r.sources %}<li>{{ s }}</li>{% endfor %}
+  </ol>
+  {% else %}
+  <p class="muted">No sources recorded.</p>
+  {% endif %}
+
+  <h3>Disclaimer</h3>
+  <div class="disclaimer"><strong>Not investment advice.</strong> {{ disclaimer }}</div>
+</section>
+</body>
+</html>
