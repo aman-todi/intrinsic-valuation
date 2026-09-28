@@ -107,6 +107,9 @@ class SotpSegmentAssumption(BaseModel):
     valuation_approach: str  # "fcff" or "ev_ebitda_multiple"
     ev_ebitda_multiple: float  # used only when valuation_approach == "ev_ebitda_multiple"
     fcff_assumptions: FCFFAssumptions | None = None  # used only when valuation_approach == "fcff"
+    # From the per-segment SegmentMultipleAssumptions call: lets the engine derive segment
+    # EBITDA as revenue x margin when the segment discloses no operating income / D&A.
+    segment_ebitda_margin: float | None = None
 
 
 class SotpAssumptions(BaseModel):
