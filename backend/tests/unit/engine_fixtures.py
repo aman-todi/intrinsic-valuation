@@ -3,7 +3,7 @@
 Organisation:
     1. Low-level builders (``build_financials``, ``market``, ``af``)
     2. Assumption builders per model type (``fcff_assumptions``, ``fcfe_assumptions``)
-    3. Named company fixtures per scenario (FCFF, FCFE sections)
+    3. Named company fixtures per scenario (FCFF, FCFE, SOTP sections)
 
 Other engine tickets: add builders/fixtures in the matching section; keep company
 fixtures small and round-numbered so expected values are easy to hand-check.
@@ -16,6 +16,8 @@ from app.schemas.assumptions import (
     AssumptionSource,
     FCFEAssumptions,
     FCFFAssumptions,
+    SotpAssumptions,
+    SotpSegmentAssumption,
 )
 from app.schemas.financials import (
     BalanceSheetLine,
@@ -24,6 +26,7 @@ from app.schemas.financials import (
     IncomeStatementLine,
     MarketSnapshot,
     NormalizedFinancials,
+    SegmentLine,
 )
 
 # --------------------------------------------------------------------------- 1. builders
@@ -286,3 +289,85 @@ def levered_mature_co() -> NormalizedFinancials:
         cash_flow(2025, da=45.0, capex=-70.0, d_nwc=5.0),  # 30
     ]
     return build_financials("LEVR", rows, [balance(2025, cash=80.0, debt=900.0, equity=1000.0)], cfs)
+
+
+# --------------------------------------------------------------------------- 3c. SOTP companies
+
+
+def segment(
+    fy: int,
+    name: str,
+    revenue: float,
+    operating_income: float | None,
+    da: float | None = None,
+    capex: float | None = None,
+    is_ttm: bool = False,
+) -> SegmentLine:
+    return SegmentLine(
+        period=period(fy, is_ttm),
+        segment_name=name,
+        revenue=revenue,
+        operating_income=operating_income,
+        depreciation_amortization=da,
+        capex=capex,
+        assets=None,
+    )
+
+
+def sotp_segment(
+    name: str,
+    approach: str,
+    multiple: float = 0.0,
+    fcff: FCFFAssumptions | None = None,
+) -> SotpSegmentAssumption:
+    return SotpSegmentAssumption(
+        segment_name=name, valuation_approach=approach, ev_ebitda_multiple=multiple, fcff_assumptions=fcff
+    )
+
+
+def sotp_assumptions(
+    segments: list[SotpSegmentAssumption],
+    overhead: float = 0.0,
+    consolidated_fcff: FCFFAssumptions | None = None,
+) -> SotpAssumptions:
+    return SotpAssumptions(
+        segments=segments,
+        corporate_overhead_capitalized=af(overhead),
+        conglomerate_discount_note="test note",
+        consolidated_fcff=consolidated_fcff,
+    )
+
+
+def flat_fcff_assumptions(target_margin: float) -> FCFFAssumptions:
+    """Zero growth, margin already at target: FCFF is a flat perpetuity = NOPAT / WACC (WACC 8.1%)."""
+    return fcff_assumptions(growth=(0.0, 0.0, 0.0, 0.0, 0.0), target_margin=target_margin, g_terminal=0.0)
+
+
+def two_segment_co() -> NormalizedFinancials:
+    """Conglomerate: 'Industrial' (rev 600, EBIT 90, D&A 30) + 'Services' (rev 400, EBIT 90, D&A 20).
+
+    Consolidated: revenue 1000, EBIT 180, 100 diluted shares, cash 100, debt 300.
+    """
+    fin = build_financials(
+        "CONG",
+        [income(2024, 950.0, 170.0, 120.0, 100.0), income(2025, 1000.0, 180.0, 125.0, 100.0)],
+        [balance(2025, cash=100.0, debt=300.0, equity=900.0)],
+        [cash_flow(2025, da=50.0, capex=-60.0)],
+    )
+    fin.segments = [
+        segment(2024, "Industrial", 570.0, 85.0, da=28.0, capex=-35.0),
+        segment(2025, "Industrial", 600.0, 90.0, da=30.0, capex=-40.0),
+        segment(2024, "Services", 380.0, 85.0, da=18.0, capex=-15.0),
+        segment(2025, "Services", 400.0, 90.0, da=20.0, capex=-20.0),
+    ]
+    return fin
+
+
+def mature_co_single_segment() -> NormalizedFinancials:
+    """``mature_co`` with one segment identical to the consolidated income statement / cash flow."""
+    fin = mature_co()
+    fin.segments = [
+        segment(r.period.fiscal_year, "Whole", r.revenue, r.operating_income) for r in fin.income_statements
+    ]
+    fin.segments[-1] = segment(2025, "Whole", 1000.0, 180.0, da=50.0, capex=-70.0)
+    return fin
