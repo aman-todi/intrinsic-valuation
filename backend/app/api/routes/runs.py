@@ -139,7 +139,7 @@ async def _enqueue_or_fail(session: DbSession, run: Run, enqueue: Any) -> None:
 
 
 def _bounds_422(violations: list[dict[str, Any]]) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=violations)
+    return HTTPException(status_code=422, detail=violations)
 
 
 # ------------------------------------------------------------------------------------------------

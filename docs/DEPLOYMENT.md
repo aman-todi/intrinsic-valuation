@@ -306,7 +306,7 @@ cd backend
 uv venv -p python3.13 .venv && uv pip install -p .venv -e '.[dev]'
 .venv/bin/alembic upgrade head
 .venv/bin/uvicorn app.main:app --reload --port 8000                  # terminal 1
-.venv/bin/saq app.jobs.worker_settings.settings                      # terminal 2 (same as Dockerfile.worker CMD)
+.venv/bin/saq app.jobs.worker_settings.settings -v                   # terminal 2 (same as Dockerfile.worker CMD)
 
 cd ../frontend && npm ci
 npm run dev          # terminal 3 -> http://localhost:3000 (uses NEXT_PUBLIC_* from the environment / frontend/.env.local)
@@ -314,6 +314,8 @@ npm run dev:mock     # UI only, API mocked with MSW - no backend needed
 ```
 
 Notes:
-- With local Postgres, Supabase Auth is not present. Either keep `SUPABASE_URL` and the anon key pointing at a real Supabase project, which only handles sign-in and JWKS, or use the dev auth bypass from `.env.example` (`DEV_AUTH_BYPASS`) once your checkout has it. **Never** enable it in production: the ECS task definitions pin `DEV_AUTH_BYPASS=false`.
-- `STORAGE_BACKEND` (see `.env.example`) lets local dev write artifacts to disk instead of S3. Production pins `s3`.
+- With local Postgres, Supabase Auth is not present. Either keep `SUPABASE_URL` and the anon key pointing at a real Supabase project, which only handles sign-in and JWKS, or set `DEV_AUTH_BYPASS=true`: the frontend (with `NEXT_PUBLIC_SUPABASE_URL` unset) sends `Bearer dev-bypass-token`, which the API maps to a fixed dev user it inserts into the stub `auth.users`. **Never** enable it in production: the ECS task definitions pin `DEV_AUTH_BYPASS=false`.
+- `STORAGE_BACKEND=local` (+ `LOCAL_STORAGE_DIR`, `PUBLIC_API_BASE_URL`) writes artifacts to disk instead of S3; download links become signed, expiring `GET /api/files/...` URLs on the API. Production pins `s3`.
+- No keys at all: without `ANTHROPIC_API_KEY` proposals and report prose use the deterministic fallback; without `FRED_API_KEY` set `RISK_FREE_RATE_OVERRIDE=0.042` (the run is flagged). A minimal offline-ish backend `.env`:
+  `DATABASE_URL=DATABASE_POOLER_URL=postgresql+psycopg://postgres@localhost:5432/postgres`, `REDIS_URL=redis://localhost:6379`, `STORAGE_BACKEND=local`, `DEV_AUTH_BYPASS=true`, `RISK_FREE_RATE_OVERRIDE=0.042` (EDGAR and Yahoo Finance still need internet access).
 - Tests never need any of this. See `CLAUDE.md`: unit tests are offline, and integration tests use `TEST_DATABASE_URL` and `TEST_REDIS_URL`.

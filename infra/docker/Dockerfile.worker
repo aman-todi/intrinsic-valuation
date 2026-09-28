@@ -11,4 +11,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/pyproject.toml ./
 COPY backend/app ./app
 RUN pip install uv && uv pip install --system .
-CMD ["saq", "app.jobs.worker_settings.settings"]
+# SAQ 0.26 CLI: dotted path to the settings dict; -v = INFO logging. SIGTERM handling: see worker_settings.py.
+CMD ["saq", "app.jobs.worker_settings.settings", "-v"]
