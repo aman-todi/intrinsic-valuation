@@ -39,13 +39,18 @@ class ReportNarrative(BaseModel):
 
 
 def terminal_value_share(result: ValuationResult) -> float | None:
-    """``terminal_value`` (the engine reports its present value) as a share of EV, if known.
+    """Present value of the terminal value as a share of operating value, if known.
 
-    For equity-direct models EV == equity value, so this is the share of equity value.
+    Engines report ``terminal_value`` undiscounted (at the end of the explicit horizon), so it
+    is discounted with the last projection row's ``discount_factor``. NAV-style models (no
+    discount factor on their projection rows) return None.
     """
-    if result.terminal_value is None or result.enterprise_value <= 0:
+    if result.terminal_value is None or result.operating_value <= 0 or not result.projection_rows:
         return None
-    return result.terminal_value / result.enterprise_value
+    df = result.projection_rows[-1].get("discount_factor")
+    if not isinstance(df, int | float):
+        return None
+    return result.terminal_value * df / result.operating_value
 
 
 def _key_facts(result: ValuationResult, company_name: str) -> list[str]:

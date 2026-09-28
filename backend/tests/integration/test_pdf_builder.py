@@ -70,7 +70,11 @@ def test_pdf_handles_empty_grid_and_scenarios():
 
 def test_render_html_sections_and_high_tv_flag():
     result = fixture_result("fcff")
-    result = result.model_copy(update={"terminal_value": result.enterprise_value * 0.85})
+    # terminal_value is undiscounted; its PV (x last-row discount factor) is 85% of operating value
+    rows = [*result.projection_rows[:-1], {**(result.projection_rows or [{}])[-1], "discount_factor": 0.5}]
+    result = result.model_copy(
+        update={"projection_rows": rows, "terminal_value": result.operating_value * 0.85 / 0.5}
+    )
     html = render_html(result, fallback_narrative(result, "Northwind", []), company_name="Northwind")
     for heading in (
         "Executive summary",
