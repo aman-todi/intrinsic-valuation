@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import settings
 from app.db.models import CachedModel
+from app.runs.repository import get_live_cached_model
 
 log = logging.getLogger(__name__)
 
@@ -98,12 +99,6 @@ async def hold_build_lock(
             await release_build_lock(redis, cache_key, owner)
         except Exception:  # noqa: BLE001 — TTL expiry is the backstop
             log.warning("build lock release failed for %s", cache_key, exc_info=True)
-
-
-async def get_live_cached_model(session: AsyncSession, cache_key: str) -> CachedModel | None:
-    from app.runs.repository import get_live_cached_model as _get
-
-    return await _get(session, cache_key)
 
 
 async def poll_for_cache_hit(

@@ -62,6 +62,7 @@ testpaths = ["tests"]
 markers = [
   "integration: needs Postgres/Redis or external binaries",
   "soffice: needs LibreOffice on PATH",
+  "real_excel_verify: run-pipeline test that keeps the real LibreOffice recalc verification",
 ]
 
 [tool.ruff]

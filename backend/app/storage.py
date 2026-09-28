@@ -390,7 +390,9 @@ def make_storage(cfg: Settings | None = None) -> ArtifactStorage:
             secret=cfg.STORAGE_SIGNING_SECRET or None,
             default_expiry=cfg.PRESIGNED_URL_TTL_SECONDS,
         )
-    return S3Storage(cfg.S3_BUCKET_NAME, region_name=cfg.AWS_REGION, default_expiry=cfg.PRESIGNED_URL_TTL_SECONDS)
+    return S3Storage(
+        cfg.S3_BUCKET_NAME, region_name=cfg.AWS_REGION, default_expiry=cfg.PRESIGNED_URL_TTL_SECONDS
+    )
 
 
 _storage: ArtifactStorage | None = None
