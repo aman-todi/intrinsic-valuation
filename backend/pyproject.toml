@@ -70,7 +70,7 @@ markers = [
 source = ["app"]
 # SQLAlchemy's asyncio layer runs ORM code inside greenlets; without this, code reached through
 # `await session...` in routes/jobs is under-reported.
-concurrency = ["greenlet"]
+concurrency = ["thread", "greenlet"]
 
 [tool.coverage.report]
 skip_empty = true

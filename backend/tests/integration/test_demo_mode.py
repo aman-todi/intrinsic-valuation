@@ -7,7 +7,10 @@ FRED endpoints and that the run is loudly flagged as demo data.
 """
 
 import math
+import shutil
 from urllib.parse import urlparse
+
+import pytest
 
 from app.data import demo
 from app.data.demo.providers import DemoMarketProvider, FixtureEdgarClient
@@ -83,5 +86,43 @@ async def test_demo_mode_unknown_ticker_fails_cleanly(env):  # noqa: F811
         assert out["status"] == "failed"
         row = await env.row(run_id)
         assert "not found" in (row.error_message or "")
+    finally:
+        await edgar.aclose()
+
+
+@pytest.mark.real_excel_verify
+@pytest.mark.parametrize(
+    ("ticker", "model"),
+    [("HON", "sotp"), ("JPM", "excess_return"), ("O", "nav_reit"), ("EOG", "nav_ep"), ("SNOW", "fcff")],
+)
+async def test_demo_mode_every_model_type_builds(env, ticker, model):  # noqa: F811
+    """Full pipeline (classify -> propose -> engine -> Excel -> PDF) on each model type's fixture shape,
+    with the real LibreOffice recalc check: the workbook's live formulas must reproduce the engine."""
+    settings = env.settings.model_copy(update={"DATA_SOURCE_MODE": "fixtures", "FRED_API_KEY": ""})
+    edgar = FixtureEdgarClient()
+    ctx = {
+        "edgar_client": edgar,
+        "market_provider": DemoMarketProvider(),
+        "anthropic_client": None,
+        "settings": settings,
+    }
+    uid = await env.make_user()
+    try:
+        run_id = (await env.create_run(uid, ticker)).json()["id"]
+        assert (await env.classify(run_id, **ctx))["status"] == "awaiting_confirm"
+        assert (await env.get_run(uid, run_id))["model_type"] == model
+        assert (await env.confirm(uid, run_id)).status_code == 200
+        assert (await env.build(run_id, **ctx))["status"] == "complete"
+        row = await env.row(run_id)
+        result = row.valuation_result
+        assert result["model_type"] == model
+        flags = result["data_confidence_flags"]
+        assert flags[0] == demo.DEMO_DATA_FLAG
+        if shutil.which("soffice"):
+            assert not any("Excel recalculation check" in f for f in flags), flags
+        price = demo.DEMO_PRICES[ticker][0]
+        assert 0.05 * price <= result["value_per_share"] <= 20 * price
+        assert await env.storage.exists(row.s3_prefix + "model.xlsx")
+        assert await env.storage.exists(row.s3_prefix + "report.pdf")
     finally:
         await edgar.aclose()
