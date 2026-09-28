@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -70,9 +71,9 @@ def format_usd_short(value: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _median(xs: list[float]) -> float | None:
-    xs = [x for x in xs if x is not None and math.isfinite(x)]
-    return statistics.median(xs) if xs else None
+def _median(xs: Sequence[float | None]) -> float | None:
+    vals = [x for x in xs if x is not None and math.isfinite(x)]
+    return statistics.median(vals) if vals else None
 
 
 def _div(a: float | None, b: float | None) -> float | None:
@@ -380,12 +381,12 @@ def _reit_anchors(a: Anchors, f: NormalizedFinancials, window_years: int) -> Non
             last.real_estate_investments_gross - last.accumulated_depreciation,
             Kind.USD,
         )
-        noi = a.v("noi_proxy")
-        if noi is not None and last.real_estate_investments_gross > 0:
+        noi_proxy = a.v("noi_proxy")
+        if noi_proxy is not None and last.real_estate_investments_gross > 0:
             a.add(
                 "implied_cap_rate_on_gross_book",
                 "NOI proxy / gross real estate (book cap rate)",
-                noi / last.real_estate_investments_gross,
+                noi_proxy / last.real_estate_investments_gross,
                 Kind.PCT,
             )
         if last.ffo is not None:

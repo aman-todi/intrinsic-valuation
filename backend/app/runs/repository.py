@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -59,6 +59,23 @@ async def get_active_run(session: AsyncSession, user_id: UUID) -> Run | None:
 async def get_worker_owned_run(session: AsyncSession, user_id: UUID) -> Run | None:
     """The run holding the one-active-run lock (classifying/proposing/building), if any."""
     stmt = select(Run).where(Run.user_id == user_id, Run.status.in_(list(ACTIVE_STATUSES))).limit(1)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_stale_cancelled_run(session: AsyncSession, user_id: UUID, older_than_s: float) -> Run | None:
+    """The user's worker-owned run whose cancel was requested more than ``older_than_s`` ago and never
+    acknowledged (row locked FOR UPDATE). Compared on the DB clock (``updated_at`` is trigger-set)."""
+    stmt = (
+        select(Run)
+        .where(
+            Run.user_id == user_id,
+            Run.status.in_(list(ACTIVE_STATUSES)),
+            Run.cancel_requested.is_(True),
+            Run.updated_at < func.now() - timedelta(seconds=older_than_s),
+        )
+        .limit(1)
+        .with_for_update()
+    )
     return (await session.execute(stmt)).scalar_one_or_none()
 
 

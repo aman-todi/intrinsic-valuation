@@ -50,7 +50,7 @@ def _prompt(call: dict) -> str:
 
 
 def test_constants() -> None:
-    assert PROMPT_VERSION == "v1"
+    assert PROMPT_VERSION == "v2"
     assert MAX_REPAIR_ATTEMPTS == 3
 
 

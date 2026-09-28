@@ -59,6 +59,15 @@ router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 SSE_POLL_INTERVAL_S = 1.5
 LIVE_PRICE_TIMEOUT_S = 10.0
+# A cancel-requested run that still holds the one-active-run slot this long after its last update is
+# treated as abandoned (its job never ran to acknowledge the cancel) and freed by the next POST.
+STALE_CANCEL_AFTER_S = 30.0
+# The SAQ job that owns a run in each worker-owned status.
+_JOB_FOR_STATUS: dict[RunStatus, str] = {
+    RunStatus.CLASSIFYING: jobs_queue.CLASSIFY_JOB,
+    RunStatus.PROPOSING: jobs_queue.CLASSIFY_JOB,
+    RunStatus.BUILDING: jobs_queue.BUILD_JOB,
+}
 _market_provider: MarketDataProvider | None = None
 
 
@@ -138,6 +147,16 @@ async def _enqueue_or_fail(session: DbSession, run: Run, enqueue: Any) -> None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "job queue unavailable") from exc
 
 
+async def _job_not_started(function: str, run_id: UUID) -> bool:
+    """Ask SAQ whether the run's job is still queued/gone (see ``abort_if_not_started``). Any queue
+    error -> False: fall back to the normal path (the worker polls ``cancel_requested``)."""
+    try:
+        return await jobs_queue.abort_if_not_started(function, run_id)
+    except Exception:  # noqa: BLE001
+        log.warning("could not inspect the queue for run %s", run_id, exc_info=True)
+        return False
+
+
 def _bounds_422(violations: list[dict[str, Any]]) -> HTTPException:
     return HTTPException(status_code=422, detail=violations)
 
@@ -147,6 +166,34 @@ def _bounds_422(violations: list[dict[str, Any]]) -> HTTPException:
 # ------------------------------------------------------------------------------------------------
 
 
+async def _reap_stale_cancelled(session: DbSession, user_id: UUID) -> bool:
+    """Free the one-active-run slot held by a run whose cancel was never acknowledged (its job was
+    never picked up, e.g. lost with a Redis restart). True when a run was marked cancelled."""
+    await session.rollback()
+    stale = await repo.get_stale_cancelled_run(session, user_id, STALE_CANCEL_AFTER_S)
+    if stale is None:
+        return False
+    await transition(
+        session,
+        stale,
+        RunStatus.CANCELLED,
+        stage="cancelled",
+        message="Cancelled (the job never acknowledged the cancel request)",
+    )
+    await session.commit()
+    log.warning("marked stale cancel-requested run %s cancelled", stale.id)
+    return True
+
+
+async def _insert_run(session: DbSession, user_id: UUID, body: CreateRunRequest) -> Run:
+    run = Run(
+        user_id=user_id, ticker=body.ticker.strip().upper(), mode=body.mode, status=RunStatus.CLASSIFYING
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
@@ -154,16 +201,19 @@ def _bounds_422(violations: list[dict[str, Any]]) -> HTTPException:
     responses={409: {"model": ActiveRunConflict}},
 )
 async def create_run(body: CreateRunRequest, user: CurrentUser, session: DbSession) -> Any:
-    run = Run(
-        user_id=user.id, ticker=body.ticker.strip().upper(), mode=body.mode, status=RunStatus.CLASSIFYING
-    )
-    session.add(run)
     try:
-        await session.flush()
+        run = await _insert_run(session, user.id, body)
     except IntegrityError as exc:
-        if _is_active_run_violation(exc):
+        if not _is_active_run_violation(exc):
+            raise
+        if not await _reap_stale_cancelled(session, user.id):
             return await _conflict(session, user.id)
-        raise
+        try:  # retry once now that the stale run no longer holds the slot
+            run = await _insert_run(session, user.id, body)
+        except IntegrityError as exc2:
+            if _is_active_run_violation(exc2):
+                return await _conflict(session, user.id)
+            raise
     append_event(session, run, stage="queued", message=f"Queued {run.ticker}", progress=0)
     await session.commit()
     await _enqueue_or_fail(session, run, jobs_queue.enqueue_classify)
@@ -304,6 +354,16 @@ async def cancel_run(run_id: str, user: CurrentUser, session: DbSession, redis: 
     if state == RunStatus.AWAITING_CONFIRM:
         # nothing is running: cancel directly
         await transition(session, run, RunStatus.CANCELLED, stage="cancelled", message="Cancelled by user")
+    elif state in _JOB_FOR_STATUS and await _job_not_started(_JOB_FOR_STATUS[state], run.id):
+        # the job is still queued (now aborted) or gone: no worker will ever acknowledge the cancel
+        state = RunStatus.CANCELLED
+        await transition(
+            session,
+            run,
+            RunStatus.CANCELLED,
+            stage="cancelled",
+            message="Cancelled by user (before a worker started it)",
+        )
     else:
         await transition(session, run, state, stage="cancelling", message="Cancel requested")
     await session.commit()

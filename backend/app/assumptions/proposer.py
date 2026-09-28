@@ -59,7 +59,7 @@ from app.schemas.macro import DamodaranIndustryData
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"  # v2: excess-return bounds text (cost_of_equity > g + 0.005)
 MAX_REPAIR_ATTEMPTS = 3
 MAX_TOKENS = 4096  # 17 fields x (value + <=240-char rationale + source) needs more than 2048
 RATIONALE_MAX = 240
@@ -785,7 +785,8 @@ def _fcff_fallback(
     g1, g_src = _blend(a.v("revenue_cagr"), industry.revenue_growth_5y, 0.6, 0.05)
     g1 = _clamp(g1, -0.10, 1.0 if early_stage else 0.25)
     if early_stage:
-        margin = industry.pretax_operating_margin if (industry.pretax_operating_margin or 0) > 0 else 0.15
+        ind_margin = industry.pretax_operating_margin
+        margin = ind_margin if ind_margin is not None and ind_margin > 0 else 0.15
         margin, m_src = _clamp(margin, 0.05, 0.40), S.INDUSTRY_MEDIAN
     else:
         margin, m_src = _blend(a.v("operating_margin_median"), industry.pretax_operating_margin, 0.7, 0.10)

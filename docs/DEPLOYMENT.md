@@ -319,3 +319,49 @@ Notes:
 - No keys at all: without `ANTHROPIC_API_KEY` proposals and report prose use the deterministic fallback; without `FRED_API_KEY` set `RISK_FREE_RATE_OVERRIDE=0.042` (the run is flagged). A minimal offline-ish backend `.env`:
   `DATABASE_URL=DATABASE_POOLER_URL=postgresql+psycopg://postgres@localhost:5432/postgres`, `REDIS_URL=redis://localhost:6379`, `STORAGE_BACKEND=local`, `DEV_AUTH_BYPASS=true`, `RISK_FREE_RATE_OVERRIDE=0.042` (EDGAR and Yahoo Finance still need internet access).
 - Tests never need any of this. See `CLAUDE.md`: unit tests are offline, and integration tests use `TEST_DATABASE_URL` and `TEST_REDIS_URL`.
+
+### Offline demo mode (`DATA_SOURCE_MODE=fixtures`)
+
+For a laptop with no internet access (or no SEC/Yahoo/FRED access), or for a demo that must be
+repeatable, set `DATA_SOURCE_MODE=fixtures` in the **worker's and the API's** environment. Nothing
+else changes: same database, Redis, jobs, Excel and PDF.
+
+| Source | Live (`live`, the default) | Demo (`fixtures`) |
+|---|---|---|
+| SEC EDGAR | data.sec.gov / www.sec.gov | the bundled fixture JSON in `backend/app/data/demo/edgar/` (20 tickers), served in-process by `FixtureEdgarClient` |
+| Price / shares | Yahoo Finance | fixed values per ticker (`DEMO_PRICES` in `app/data/demo/__init__.py`) |
+| Risk-free rate | FRED DGS10 | fixed 4.20% |
+| Damodaran | S3 cache, else the bundled snapshot | the bundled snapshot (S3 is never read) |
+| Anthropic | used if `ANTHROPIC_API_KEY` is set | same (leave it empty for a fully offline run) |
+
+Demo tickers: AAPL, MSFT, GOOGL, WMT, NUE, PFE, DUK, SNOW (FCFF), JPM, TRV (excess return), O (REIT NAV),
+EOG (E&P NAV), HON (SOTP), and the declines VKTX (pre-commercial biotech), ALAB (insufficient history),
+TSM (20-F filer), MET (life insurer), EPD (MLP), NEM (mining), CVII (SPAC). Any other ticker fails with
+"not found". The fixtures are hand-built in SEC's formats from the companies' public filings; headline
+figures are close to the real ones, secondary lines are approximations. **They are not live data.**
+
+Every demo run is marked so it cannot be mistaken for a real valuation:
+- the first data-confidence flag of the result (Excel, PDF, result page) and the first classification
+  reason on the confirm screen read **"DEMO DATA — not live filings/prices"**, plus a flag naming the
+  fixed risk-free rate and prices;
+- the filing accession is prefixed `DEMO-`, so demo builds never share cache entries (`cached_models`,
+  `cached_proposals`) with live runs even on the same database.
+
+A fully offline backend `.env` for a demo:
+
+```bash
+DATABASE_URL=postgresql+psycopg://postgres@localhost:5432/postgres
+DATABASE_POOLER_URL=postgresql+psycopg://postgres@localhost:5432/postgres
+REDIS_URL=redis://localhost:6379
+STORAGE_BACKEND=local
+DEV_AUTH_BYPASS=true
+DATA_SOURCE_MODE=fixtures        # no FRED_API_KEY / RISK_FREE_RATE_OVERRIDE / ANTHROPIC_API_KEY needed
+```
+
+Then run the processes as in Option B, open http://localhost:3000 and enter e.g. `AAPL`, `HON` or `JPM`.
+**Never** set `DATA_SOURCE_MODE=fixtures` in a deployed environment: the default is `live`, and the ECS
+task definitions pin `DATA_SOURCE_MODE=live`.
+
+To add or change a demo ticker, edit `backend/tests/fixtures/edgar/build_fixtures.py`, run
+`cd backend && .venv/bin/python -m tests.fixtures.edgar.build_fixtures` (it writes into
+`app/data/demo/edgar/`, the one canonical copy the tests also read), and add a price to `DEMO_PRICES`. See `CLAUDE.md`: unit tests are offline, and integration tests use `TEST_DATABASE_URL` and `TEST_REDIS_URL`.

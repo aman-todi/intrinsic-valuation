@@ -11,6 +11,8 @@ from typing import Any
 from uuid import UUID
 
 from saq import Queue
+from saq.job import TERMINAL_STATUSES as SAQ_TERMINAL_STATUSES
+from saq.job import Status as SaqStatus
 
 from app.config import settings
 
@@ -53,11 +55,36 @@ async def _enqueue(function: str, run_id: UUID | str, timeout: int, queue: Any |
     await q.enqueue(
         function,
         run_id=str(run_id),
-        key=f"{function}:{run_id}",  # idempotent: re-enqueueing the same run's job is a no-op
+        key=job_key(function, run_id),  # idempotent: re-enqueueing the same run's job is a no-op
         timeout=timeout,
         retries=1,
         ttl=JOB_TTL_S,
     )
+
+
+def job_key(function: str, run_id: UUID | str) -> str:
+    return f"{function}:{run_id}"
+
+
+async def abort_if_not_started(function: str, run_id: UUID | str, queue: Any | None = None) -> bool:
+    """True when the run's job is not running, so the caller may cancel the run directly.
+
+    SAQ keeps each job's status in Redis under its key. ``None`` (never enqueued, expired, or lost with
+    a Redis restart) or a finished job -> True. ``new``/``queued`` (no worker has picked it up) ->
+    the job is aborted, which removes it from the queue, and True unless a worker dequeued it in the
+    meantime (SAQ then marks it ``aborting`` and cancels it in the worker). ``active`` -> False: the
+    worker owns the run and acknowledges the cancel itself.
+    """
+    q = queue or get_queue()
+    key = job_key(function, run_id)
+    job = await q.job(key)
+    if job is None or job.status in SAQ_TERMINAL_STATUSES:
+        return True
+    if job.status in (SaqStatus.NEW, SaqStatus.QUEUED):
+        await q.abort(job, "run cancelled before a worker picked it up")
+        after = await q.job(key)
+        return after is None or after.status != SaqStatus.ABORTING
+    return False
 
 
 async def enqueue_classify(run_id: UUID | str, queue: Any | None = None) -> None:

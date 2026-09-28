@@ -42,6 +42,7 @@ cols = terminal_roe base -0.02..+0.02 step 0.01. Labels like "8.50%". A cell who
 inputs trip the ke - gT guard is omitted (and compute() flags the incomplete grid).
 """
 
+from functools import partial
 from typing import Any
 
 from app.schemas.assumptions import ExcessReturnAssumptions
@@ -54,6 +55,7 @@ from app.valuation._common import (
     latest_diluted_shares,
     pct_label,
     run_date,
+    scenario_or_zero,
     steps,
     with_values,
 )
@@ -169,7 +171,8 @@ class ExcessReturnValuator(Valuator):
         if equity <= 0:
             flags.append("excess return equity value is non-positive")
 
-        scenarios = self.compute_scenarios(financials, market, a)
+        scenarios, scenario_flags = self.scenarios_with_flags(financials, market, a)
+        flags.extend(scenario_flags)
         grid = self.compute_sensitivity_grid(financials, market, a)
         if len(grid) < 25:
             flags.append(f"sensitivity grid incomplete: {25 - len(grid)} cells violate ke - g >= 0.5%")
@@ -212,10 +215,15 @@ class ExcessReturnValuator(Valuator):
             discount_rate=a.cost_of_equity.value,
         )
 
-    def compute_scenarios(
-        self, financials: NormalizedFinancials, market: MarketSnapshot, base_assumptions: Any
-    ) -> list[ScenarioResult]:
+    def scenarios_with_flags(
+        self,
+        financials: NormalizedFinancials,
+        market: MarketSnapshot,
+        base_assumptions: Any,
+        historical_window_years: int = 5,
+    ) -> tuple[list[ScenarioResult], list[str]]:
         a: ExcessReturnAssumptions = base_assumptions
+        flags: list[str] = []
         out = [
             ScenarioResult(
                 label="base", value_per_share=_value_per_share(financials, a), key_assumption_deltas={}
@@ -228,12 +236,27 @@ class ExcessReturnValuator(Valuator):
             updates["cost_of_equity"] = a.cost_of_equity.value + ke_delta
             deltas = {n: roe_delta for n in ROE_FIELDS}
             deltas["cost_of_equity"] = ke_delta
-            vps = _value_per_share(financials, with_values(a, **updates))
+            vps = scenario_or_zero(
+                label, partial(_value_per_share, financials, with_values(a, **updates)), flags
+            )
             out.append(ScenarioResult(label=label, value_per_share=vps, key_assumption_deltas=deltas))
-        return out
+        return out, flags
+
+    def compute_scenarios(
+        self,
+        financials: NormalizedFinancials,
+        market: MarketSnapshot,
+        base_assumptions: Any,
+        historical_window_years: int = 5,
+    ) -> list[ScenarioResult]:
+        return self.scenarios_with_flags(financials, market, base_assumptions, historical_window_years)[0]
 
     def compute_sensitivity_grid(
-        self, financials: NormalizedFinancials, market: MarketSnapshot, base_assumptions: Any
+        self,
+        financials: NormalizedFinancials,
+        market: MarketSnapshot,
+        base_assumptions: Any,
+        historical_window_years: int = 5,
     ) -> list[SensitivityCell]:
         a: ExcessReturnAssumptions = base_assumptions
         cells: list[SensitivityCell] = []

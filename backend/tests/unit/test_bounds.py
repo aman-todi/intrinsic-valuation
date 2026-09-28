@@ -210,6 +210,11 @@ def test_excess_return_cost_of_equity_gt_terminal_growth() -> None:
         )
         == []
     )
+    # the engine needs ke - g >= 0.5pt; a thinner spread must be caught here, not at build time
+    thin = check_bounds(
+        ModelType.EXCESS_RETURN, valid_excess_return(cost_of_equity=0.054, terminal_growth_rate=0.05)
+    )
+    assert any("cost_of_equity" in m and "by more than 0.005" in m for m in thin)
 
 
 def test_excess_return_terminal_growth_vs_supplied_rf() -> None:
@@ -364,3 +369,10 @@ def test_describe_bounds_mentions_every_ranged_field(schema_cls: type[BaseModel]
     for name in schema_cls.model_fields:
         assert name in text, name
     assert "3" in "\n".join(describe_bounds(FCFFAssumptions, early_stage=True))
+
+
+def test_describe_bounds_unknown_schema_is_empty() -> None:
+    class NotAnAssumptionSchema(BaseModel):
+        x: float = 0.0
+
+    assert describe_bounds(NotAnAssumptionSchema) == []

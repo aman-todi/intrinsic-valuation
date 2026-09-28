@@ -46,6 +46,7 @@ Sensitivity grid (5x5, row-major): rows = oil deck base x (0.8, 0.9, 1.0, 1.1, 1
 Labels like "$80" / "10.00%". Cells with r <= -1 are omitted.
 """
 
+from functools import partial
 from typing import Any
 
 from app.schemas.assumptions import EpNavAssumptions
@@ -58,6 +59,7 @@ from app.valuation._common import (
     latest_diluted_shares,
     pct_label,
     run_date,
+    scenario_or_zero,
     steps,
     usd_label,
     with_values,
@@ -189,7 +191,8 @@ class EpNavValuator(Valuator):
         if c["equity_value"] <= 0:
             flags.append("E&P NAV equity value is non-positive")
 
-        scenarios = self.compute_scenarios(financials, market, a)
+        scenarios, scenario_flags = self.scenarios_with_flags(financials, market, a)
+        flags.extend(scenario_flags)
         grid = self.compute_sensitivity_grid(financials, market, a)
         if len(grid) < 25:
             flags.append(f"sensitivity grid incomplete: {25 - len(grid)} cells invalid")
@@ -246,10 +249,15 @@ class EpNavValuator(Valuator):
             discount_rate=a.discount_rate_pv10.value,
         )
 
-    def compute_scenarios(
-        self, financials: NormalizedFinancials, market: MarketSnapshot, base_assumptions: Any
-    ) -> list[ScenarioResult]:
+    def scenarios_with_flags(
+        self,
+        financials: NormalizedFinancials,
+        market: MarketSnapshot,
+        base_assumptions: Any,
+        historical_window_years: int = 5,
+    ) -> tuple[list[ScenarioResult], list[str]]:
         a: EpNavAssumptions = base_assumptions
+        flags: list[str] = []
         oil, gas = a.price_deck_oil_per_bbl.value, a.price_deck_gas_per_mcf.value
         out = [
             ScenarioResult(
@@ -263,14 +271,29 @@ class EpNavValuator(Valuator):
             out.append(
                 ScenarioResult(
                     label=label,
-                    value_per_share=_value_per_share(financials, scen),
+                    value_per_share=scenario_or_zero(
+                        label, partial(_value_per_share, financials, scen), flags
+                    ),
                     key_assumption_deltas=deltas,
                 )
             )
-        return out
+        return out, flags
+
+    def compute_scenarios(
+        self,
+        financials: NormalizedFinancials,
+        market: MarketSnapshot,
+        base_assumptions: Any,
+        historical_window_years: int = 5,
+    ) -> list[ScenarioResult]:
+        return self.scenarios_with_flags(financials, market, base_assumptions, historical_window_years)[0]
 
     def compute_sensitivity_grid(
-        self, financials: NormalizedFinancials, market: MarketSnapshot, base_assumptions: Any
+        self,
+        financials: NormalizedFinancials,
+        market: MarketSnapshot,
+        base_assumptions: Any,
+        historical_window_years: int = 5,
     ) -> list[SensitivityCell]:
         a: EpNavAssumptions = base_assumptions
         cells: list[SensitivityCell] = []

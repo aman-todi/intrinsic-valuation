@@ -35,6 +35,7 @@ cols = noi_growth_rate base -0.02..+0.02 step 0.01. Labels like "5.50%". Cells w
 cap_rate <= 0 are omitted (compute() flags the incomplete grid).
 """
 
+from functools import partial
 from typing import Any
 
 from app.schemas.assumptions import ReitNavAssumptions
@@ -52,6 +53,7 @@ from app.valuation._common import (
     latest_diluted_shares,
     pct_label,
     run_date,
+    scenario_or_zero,
     steps,
     with_values,
 )
@@ -135,7 +137,8 @@ class ReitNavValuator(Valuator):
         if nav <= 0:
             flags.append("REIT NAV is non-positive (liabilities exceed asset value)")
 
-        scenarios = self.compute_scenarios(financials, market, a)
+        scenarios, scenario_flags = self.scenarios_with_flags(financials, market, a)
+        flags.extend(scenario_flags)
         grid = self.compute_sensitivity_grid(financials, market, a)
         if len(grid) < 25:
             flags.append(f"sensitivity grid incomplete: {25 - len(grid)} cells have cap rate <= 0")
@@ -194,10 +197,15 @@ class ReitNavValuator(Valuator):
             discount_rate=a.cap_rate.value,  # the capitalisation rate
         )
 
-    def compute_scenarios(
-        self, financials: NormalizedFinancials, market: MarketSnapshot, base_assumptions: Any
-    ) -> list[ScenarioResult]:
+    def scenarios_with_flags(
+        self,
+        financials: NormalizedFinancials,
+        market: MarketSnapshot,
+        base_assumptions: Any,
+        historical_window_years: int = 5,
+    ) -> tuple[list[ScenarioResult], list[str]]:
         a: ReitNavAssumptions = base_assumptions
+        flags: list[str] = []
         out = [
             ScenarioResult(
                 label="base", value_per_share=_value_per_share(financials, a), key_assumption_deltas={}
@@ -213,14 +221,29 @@ class ReitNavValuator(Valuator):
             out.append(
                 ScenarioResult(
                     label=label,
-                    value_per_share=_value_per_share(financials, scen),
+                    value_per_share=scenario_or_zero(
+                        label, partial(_value_per_share, financials, scen), flags
+                    ),
                     key_assumption_deltas=deltas,
                 )
             )
-        return out
+        return out, flags
+
+    def compute_scenarios(
+        self,
+        financials: NormalizedFinancials,
+        market: MarketSnapshot,
+        base_assumptions: Any,
+        historical_window_years: int = 5,
+    ) -> list[ScenarioResult]:
+        return self.scenarios_with_flags(financials, market, base_assumptions, historical_window_years)[0]
 
     def compute_sensitivity_grid(
-        self, financials: NormalizedFinancials, market: MarketSnapshot, base_assumptions: Any
+        self,
+        financials: NormalizedFinancials,
+        market: MarketSnapshot,
+        base_assumptions: Any,
+        historical_window_years: int = 5,
     ) -> list[SensitivityCell]:
         a: ReitNavAssumptions = base_assumptions
         cells: list[SensitivityCell] = []

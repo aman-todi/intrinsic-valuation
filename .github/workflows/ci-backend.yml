@@ -6,12 +6,24 @@ on:
   pull_request:
     paths: ["backend/**", ".github/workflows/ci-backend.yml"]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-backend-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend
+    # Throwaway Postgres 16 + Redis as service containers (NOT the real Supabase project: CI must never
+    # touch shared/prod data; see docs/TESTING.md). The integration conftest reads TEST_DATABASE_URL /
+    # TEST_REDIS_URL and runs `alembic upgrade head` against the service DB before the tests; the initial
+    # migration creates stub auth.users / auth.uid() when the Supabase `auth` schema is absent.
     services:
       postgres:
         image: postgres:16
@@ -23,27 +35,51 @@ jobs:
       redis:
         image: redis:7-alpine
         ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
       DATABASE_POOLER_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
       TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
       REDIS_URL: redis://localhost:6379
       TEST_REDIS_URL: redis://localhost:6379
+      # never let a test reach real services
+      ANTHROPIC_API_KEY: ""
+      FRED_API_KEY: ""
+      DATA_SOURCE_MODE: live
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: System deps (LibreOffice + WeasyPrint)
+      # Same apt list as infra/docker/Dockerfile.worker, so test_excel_recalc_verification (real
+      # `soffice` headless recalc) and the WeasyPrint PDF tests run for real instead of skipping.
+      - name: System deps (LibreOffice Calc + WeasyPrint)
+        working-directory: .
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libreoffice-calc libreoffice-core \
             libpango-1.0-0 libpangoft2-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
             libharfbuzz-subset0 fonts-liberation fonts-dejavu-core shared-mime-info
+          soffice --version
       - name: Install
         run: uv venv -p 3.13 .venv && uv pip install -p .venv -e '.[dev]'
-      - name: Lint
+      - name: Ruff
         run: .venv/bin/ruff check . && .venv/bin/ruff format --check .
-      - name: Test
-        run: .venv/bin/pytest --cov=app --cov-report=term-missing
+      - name: Mypy (engine, classifier, assumptions, schemas, runs, demo data)
+        run: .venv/bin/mypy app/valuation app/classify app/assumptions app/schemas app/runs app/data/demo
+      - name: Pytest (unit + integration) with overall coverage floor
+        run: >-
+          .venv/bin/pytest -q -ra
+          --cov=app --cov-report=term-missing:skip-covered --cov-report=xml
+          --cov-fail-under=93
+      - name: Coverage gates (valuation / classify / bounds >= 90%)
+        run: scripts/check_coverage.sh
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          retention-days: 14

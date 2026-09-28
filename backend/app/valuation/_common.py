@@ -1,5 +1,6 @@
 """Small pure helpers shared by the Excess Return / REIT NAV / E&P NAV valuators."""
 
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel
@@ -58,3 +59,14 @@ def steps(base: float, half_width: float, step: float) -> list[float]:
 
 def filing_source(financials: NormalizedFinancials) -> str:
     return f"SEC EDGAR filing (accession {financials.accession_number})"
+
+
+def scenario_or_zero(label: str, fn: Callable[[], float], flags: list[str]) -> float:
+    """A scenario's value per share, or 0.0 plus a flag when the shifted inputs are undefined
+    (e.g. the bull case's lower discount rate lands within the minimum spread of terminal growth).
+    Same convention as ``Valuator.scenarios_with_flags``: a bad scenario never fails the build."""
+    try:
+        return fn()
+    except ValuationError as exc:
+        flags.append(f"{label} scenario undefined ({exc}); reported as 0.0")
+        return 0.0

@@ -66,6 +66,15 @@ markers = [
   "real_excel_verify: run-pipeline test that keeps the real LibreOffice recalc verification",
 ]
 
+[tool.coverage.run]
+source = ["app"]
+# SQLAlchemy's asyncio layer runs ORM code inside greenlets; without this, code reached through
+# `await session...` in routes/jobs is under-reported.
+concurrency = ["greenlet"]
+
+[tool.coverage.report]
+skip_empty = true
+
 [tool.ruff]
 line-length = 110
 target-version = "py313"

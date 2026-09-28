@@ -39,6 +39,10 @@
           "value": "30"
         },
         {
+          "name": "DATA_SOURCE_MODE",
+          "value": "live"
+        },
+        {
           "name": "DEV_AUTH_BYPASS",
           "value": "false"
         },

@@ -273,7 +273,9 @@ def check_excess_return(
     out = check_finite(p, prefix)
     out += check_ranges(p, EXCESS_RETURN_RULES, prefix)
     g = p.terminal_growth_rate.value
-    out += check_discount_rate_exceeds_growth(p.cost_of_equity.value, g, "cost_of_equity", prefix, spread=0.0)
+    # Same minimum spread the excess-return engine enforces (excess_return.MIN_SPREAD): a smaller one
+    # passed bounds but then failed the build.
+    out += check_discount_rate_exceeds_growth(p.cost_of_equity.value, g, "cost_of_equity", prefix)
     if risk_free_rate is not None:
         out += check_terminal_growth_vs_rf(g, risk_free_rate, prefix)
     out += check_book_value_growth_consistency(p, prefix)
@@ -396,7 +398,7 @@ def describe_bounds(schema_cls: type[BaseModel], *, early_stage: bool = False) -
     if schema_cls is ExcessReturnAssumptions:
         return [
             *(r.describe() for r in EXCESS_RETURN_RULES),
-            "cost_of_equity > terminal_growth_rate",
+            f"cost_of_equity must exceed terminal_growth_rate + {DISCOUNT_SPREAD_MIN}",
             "terminal_growth_rate <= the market risk-free rate",
             f"book_value_growth_rate within {BOOK_VALUE_GROWTH_TOLERANCE} of "
             "average(roe_y1..roe_y5) * (1 - payout_ratio)",
