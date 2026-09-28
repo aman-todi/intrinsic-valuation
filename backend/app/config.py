@@ -1,6 +1,7 @@
 """Runtime settings loaded from environment / .env (spec §12)."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -40,6 +41,28 @@ class Settings(BaseSettings):
     BUILD_LOCK_TTL_SECONDS: int = 120
     LOG_LEVEL: str = "INFO"
     CORS_ORIGINS: str = "http://localhost:3000"
+
+    # Artifact storage (§11.4). "s3" in every deployed environment; "local" is for dev without AWS:
+    # files live under LOCAL_STORAGE_DIR and download links are short-lived HMAC-signed URLs served
+    # by the API's GET /api/files/{path} route (PUBLIC_API_BASE_URL is the browser-facing API origin).
+    STORAGE_BACKEND: Literal["s3", "local"] = "s3"
+    LOCAL_STORAGE_DIR: str = ".local-storage"
+    STORAGE_SIGNING_SECRET: str = ""  # HMAC key for local signed URLs; empty -> fixed dev key
+    PUBLIC_API_BASE_URL: str = "http://localhost:8000"
+    PRESIGNED_URL_TTL_SECONDS: int = 3600
+
+    # Job queue (SAQ on Redis)
+    SAQ_QUEUE_NAME: str = "dcf"
+    WORKER_CONCURRENCY: int = 4
+    WORKER_SHUTDOWN_GRACE_SECONDS: int = 100  # < ECS stopTimeout (120s), see §8.3
+
+    # Local dev only: used as the risk-free rate when FRED_API_KEY is empty (decimal, e.g. 0.042).
+    # Runs using it carry a data-confidence flag. Leave unset in any deployed environment.
+    RISK_FREE_RATE_OVERRIDE: float | None = None
+
+    # Local dev only: accept "Bearer dev-bypass-token" (the frontend's no-Supabase mode) as a fixed
+    # dev user. NEVER enable against a shared/production database.
+    DEV_AUTH_BYPASS: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:

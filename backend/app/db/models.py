@@ -107,6 +107,11 @@ class Run(Base):
     prompt_version: Mapped[str | None] = mapped_column(Text)
     cache_key: Mapped[str | None] = mapped_column(Text)
 
+    # results + job hand-off (migration 0002_run_results)
+    valuation_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    s3_prefix: Mapped[str | None] = mapped_column(Text)
+    pipeline_meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
     # lifecycle
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     error_message: Mapped[str | None] = mapped_column(Text)

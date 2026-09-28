@@ -47,7 +47,7 @@ def test_downgrade_then_upgrade_roundtrip(pg_url: str) -> None:
         engine.dispose()
 
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0001_init"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0002_run_results"
     engine.dispose()
 
 
