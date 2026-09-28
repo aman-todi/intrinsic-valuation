@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Keep the 15 most recent images (rollback headroom without paying for old layers)",
+      "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 15 },
+      "action": { "type": "expire" }
+    }
+  ]
+}
