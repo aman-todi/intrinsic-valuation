@@ -29,7 +29,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-OUT = Path(__file__).parent
+OUT = Path(__file__).resolve().parents[3] / "app" / "data" / "demo" / "edgar"  # canonical location
 
 ALIAS: dict[str, str] = {
     "rev": "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -184,6 +184,12 @@ class T:
     agent: str | None = None
     state: str = "DE"
     category: str = "Large Accelerated Filer"
+    # dei cover-page shares (millions) per fiscal year, when there is no diluted-share series to derive
+    # them from; the last value is used for 10-Qs
+    cover_shares: list[float] | None = None
+    # multi-class issuers: the cover page reports one fact per class (fractions of the total), which
+    # companyfacts flattens into several facts with the same end/accession
+    share_classes: tuple[float, ...] = ()
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -941,7 +947,172 @@ DUK = T(
     ),
 )
 
-TICKERS: list[T] = [AAPL, MSFT, SNOW, JPM, TRV, MET, O_REIT, EOG, HON, PFE, VKTX, ALAB, CVII, EPD, NEM, DUK]
+# Alphabet: no undimensioned diluted-share series (EPS is reported per class), so shares come from the
+# dei cover page, which lists Class A / B / C separately (pre-split counts before the July 2022 20:1
+# split). Exercises the per-class share summing in normalize.
+GOOGL = T(
+    "GOOGL",
+    1652044,
+    "Alphabet Inc.",
+    "7370",
+    "Services-Computer Programming, Data Processing, Etc.",
+    "1231",
+    ends=dec(2018, 2024),
+    exchange="Nasdaq",
+    state="DE",
+    annual={
+        "rev": [136819, 161857, 182527, 257637, 282836, 307394, 350018],
+        "costrev": [59549, 71896, 84732, 110939, 126203, 133332, 146306],
+        "rd": [21419, 26018, 27573, 31562, 39500, 45427, 49326],
+        "sm": [16333, 18464, 17946, 22912, 26567, 27917, 27808],
+        "ga": [6923, 9551, 10864, 13510, 15724, 16425, 14188],
+        "opinc": [27524, 34231, 41224, 78714, 74842, 84293, 112390],
+        "pretax": [34913, 39625, 48082, 90734, 71328, 85717, 119815],
+        "tax": [4177, 5282, 7813, 14701, 11356, 11922, 19697],
+        "ni": [30736, 34343, 40269, 76033, 59972, 73795, 100118],
+        "cash": [16701, 18498, 26465, 20945, 21879, 24048, 23466],
+        "mktsec": [92439, 101177, 110229, 118704, 91883, 86868, 72191],
+        "ltdn": [4012, 4554, 13932, 14817, 14701, 13253, 10883],
+        "ollc": [None, 1199, 1694, 2189, 2477, 2102, 2059],
+        "olln": [None, 10214, 11146, 12501, 12857, 12460, 11691],
+        "eq": [177628, 201442, 222544, 251635, 256144, 283379, 325084],
+        "da": [9035, 11781, 13697, 12441, 15928, 11946, 15311],
+        "sbc": [9353, 10794, 12991, 15376, 19362, 22460, 22785],
+        "capex": [25139, 23548, 22281, 24640, 31485, 32251, 52535],
+        "ocf": [47971, 54520, 65124, 91652, 91495, 101746, 125299],
+    },
+    cover_shares=[694.8, 688.3, 675.2, 661.9, 13040.0, 12460.0, 12211.0],
+    share_classes=(0.48, 0.07, 0.45),
+    q=Q(
+        fy=2025,
+        cur=[
+            ("2025-03-31", {"rev": 90234, "ni": 34540, "opinc": 30606}),
+            ("2025-06-30", {"rev": 96428, "ni": 28196, "opinc": 31271}),
+        ],
+        prior=[
+            ("2024-03-31", {"rev": 80539, "ni": 23662, "opinc": 25472}),
+            ("2024-06-30", {"rev": 84742, "ni": 23619, "opinc": 27425}),
+        ],
+    ),
+)
+
+# Walmart: late-January fiscal year end, 3:1 split (Feb 2024) recast in the FY2024 10-K only for the
+# years it presents.
+WMT = T(
+    "WMT",
+    104169,
+    "Walmart Inc.",
+    "5331",
+    "Retail-Variety Stores",
+    "0131",
+    ends={y: f"{y}-01-31" for y in range(2019, 2026)},
+    k_lag=45,
+    q_lag=38,
+    state="DE",
+    annual={
+        "revenues": [514405, 523964, 559151, 572754, 611289, 648125, 680985],
+        "cogs": [385301, 394605, 420315, 429000, 463721, 490142, 511753],
+        "sga": [107147, 108791, 116288, 117812, 127140, 132513, 139695],
+        "opinc": [21957, 20568, 22548, 25942, 20428, 27012, 29348],
+        "intexp": [2129, 2410, 2194, 1836, 1787, 2683, 2728],
+        "pretax": [11460, 20116, 20564, 18696, 17016, 21848, 26309],
+        "tax": [4281, 4915, 6858, 4756, 5724, 5578, 6152],
+        "ni": [6670, 14881, 13510, 13673, 11680, 15511, 19436],
+        "dil": [2945, 2868, 2847, 8376, 8172, 8123, 8075],
+        "cash": [7722, 9465, 17741, 14760, 8625, 9867, 9037],
+        "stb": [5225, 575, 224, 410, 372, 878, 3068],
+        "ltdc": [1876, 5362, 3115, 2803, 4191, 3447, 2598],
+        "ltdn": [43520, 43714, 41194, 34864, 34649, 36132, 33401],
+        "fllc": [None, 511, 491, 511, 567, 725, 800],
+        "flln": [None, 4307, 3847, 4243, 5709, 6749, 7500],
+        "ollc": [None, 1793, 1466, 1483, 1473, 1549, 1600],
+        "olln": [None, 16171, 12909, 13009, 12828, 13414, 13700],
+        "eq": [72496, 74669, 80925, 83253, 76693, 83861, 91013],
+        "mi": [7138, 6883, 6606, 8638, 7061, 6488, 6012],
+        "da": [10678, 10987, 11152, 10658, 10945, 11853, 12973],
+        "sbc": [621, 719, 1017, 897, 1030, 1136, 1243],
+        "capex": [10344, 10705, 10264, 13106, 16857, 20606, 23783],
+        "ocf": [27753, 25255, 36074, 24181, 28841, 35726, 36443],
+    },
+    restated={("dil", 2022): (2792, 2024), ("dil", 2023): (2724, 2024)},
+    q=Q(
+        fy=2026,
+        cur=[
+            ("2025-04-30", {"revenues": 165609, "ni": 4487, "opinc": 7135}),
+            ("2025-07-31", {"revenues": 177402, "ni": 7026, "opinc": 7288}),
+        ],
+        prior=[
+            ("2024-04-30", {"revenues": 161508, "ni": 5104, "opinc": 6843}),
+            ("2024-07-31", {"revenues": 169335, "ni": 4501, "opinc": 7939}),
+        ],
+    ),
+)
+
+# Nucor: cyclical steelmaker (SIC 3312) with ten years of 10-Ks -> exercises the 10-year window.
+NUE = T(
+    "NUE",
+    73309,
+    "NUCOR CORP",
+    "3312",
+    "Steel Works, Blast Furnaces & Rolling Mills (Coke Ovens)",
+    "1231",
+    ends=dec(2015, 2024),
+    state="DE",
+    annual={
+        "revenues": [16439, 16208, 20252, 25067, 22589, 20140, 36484, 41513, 34714, 30734],
+        "cogs": [15158, 14142, 17811, 21556, 20035, 18370, 25232, 27935, 26279, 26375],
+        "sga": [544, 697, 700, 815, 780, 788, 1305, 1488, 1606, 1270],
+        "opinc": [737, 1369, 1741, 2696, 1774, 982, 9947, 12090, 6829, 3089],
+        "intexp": [173, 170, 176, 159, 162, 175, 159, 222, 205, 180],
+        "pretax": [562, 1234, 1605, 3131, 1771, 1030, 9447, 11051, 6230, 2865],
+        "tax": [160, 373, 186, 689, 400, 228, 2135, 2166, 1476, 593],
+        "ni": [358, 796, 1318, 2361, 1271, 721, 6828, 7607, 4525, 2027],
+        "dil": [320, 319, 320, 318, 305, 302, 290, 262, 249, 237],
+        "cash": [2045, 2046, 949, 1398, 1535, 2356, 2366, 3858, 6384, 3558],
+        "stb": [20, 15, 30, 40, 50, 32, 37, 45, 48, 90],
+        "ltdc": [0, 0, 500, 15, 16, 16, 1, 1, 1, 1],
+        "ltdn": [4337, 4337, 3242, 3235, 4056, 5243, 5264, 6647, 6649, 5683],
+        "eq": [7419, 7439, 8095, 8960, 9579, 10272, 14602, 20047, 20818, 20258],
+        "mi": [555, 573, 625, 611, 591, 525, 620, 1024, 1028, 1031],
+        "da": [689, 700, 702, 705, 726, 850, 787, 904, 1066, 1115],
+        "sbc": [74, 71, 72, 80, 83, 85, 93, 102, 110, 120],
+        "capex": [364, 604, 1010, 961, 1477, 1543, 1622, 1948, 2213, 3195],
+        "ocf": [2179, 1245, 1004, 2169, 2748, 1983, 6231, 10071, 7115, 4485],
+    },
+    q=Q(
+        fy=2025,
+        cur=[
+            ("2025-03-31", {"revenues": 7830, "ni": 156, "opinc": 350}),
+            ("2025-06-30", {"revenues": 8457, "ni": 603, "opinc": 880}),
+        ],
+        prior=[
+            ("2024-03-31", {"revenues": 8137, "ni": 845, "opinc": 1240}),
+            ("2024-06-30", {"revenues": 8077, "ni": 645, "opinc": 950}),
+        ],
+    ),
+)
+
+TICKERS: list[T] = [
+    AAPL,
+    MSFT,
+    SNOW,
+    JPM,
+    TRV,
+    MET,
+    O_REIT,
+    EOG,
+    HON,
+    PFE,
+    VKTX,
+    ALAB,
+    CVII,
+    EPD,
+    NEM,
+    DUK,
+    GOOGL,
+    WMT,
+    NUE,
+]
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -1056,6 +1227,22 @@ class Builder:
                 isInlineXBRL=1,
             )
         )
+        if self.t.cover_shares:
+            covers = self.t.cover_shares
+            total = covers[self.years.index(fy)] if fy in self.t.ends else covers[-1]
+            for frac in self.t.share_classes or (1.0,):
+                self.dei.append(
+                    dict(
+                        end=(filed - timedelta(days=12)).isoformat(),
+                        val=int(round(total * frac * 1e6)),
+                        accn=accn,
+                        fy=fy,
+                        fp=fp,
+                        form=form,
+                        filed=filed.isoformat(),
+                    )
+                )
+            return
         dil = self.t.annual.get("dil") or next((v for k, v in self.t.annual.items() if "Units" in k), None)
         if dil:
             last = [v for v in dil if v][-1]
@@ -1378,6 +1565,8 @@ COMPANY_TICKERS = [
     (1164727, "NEM", "NEWMONT Corp /DE/"),
     (1326160, "DUK", "Duke Energy CORP"),
     (1046179, "TSM", "TAIWAN SEMICONDUCTOR MANUFACTURING CO LTD"),
+    (104169, "WMT", "Walmart Inc."),
+    (73309, "NUE", "NUCOR CORP"),
 ]
 
 

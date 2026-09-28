@@ -198,7 +198,7 @@ async def _repropose(
     window, window_reason = historical_window_years(new_model, sic(company.submissions), company.financials)
     early = False
     if new_model == ModelType.FCFF:
-        early, _ = is_early_stage(build_signals(company, market))
+        early, _ = is_early_stage(build_signals(company, market.snapshot.market_cap))
 
     assumptions: dict | None = None
     proposal_key = compute_proposal_cache_key(view.ticker, new_model.value, company.accession, PROMPT_VERSION)

@@ -18,9 +18,17 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.classify.rules import DOMESTIC_FORMS
 from app.config import Settings, get_settings
-from app.data.edgar.client import EdgarClient, EdgarError, TickerNotFoundError
-from app.data.edgar.normalize import NormalizationError, latest_10k, normalize
+from app.data.edgar.client import EdgarClient, EdgarError, EdgarNotFound, TickerNotFoundError
+from app.data.edgar.normalize import (
+    NormalizationError,
+    filer_forms,
+    fiscal_year_end_month,
+    latest_10k,
+    latest_periodic_accession,
+    normalize,
+)
 from app.data.edgar.segments import fetch_segments
 from app.data.macro import damodaran
 from app.data.macro.fred import FredApiKeyMissing, FredUnavailable, get_risk_free_rate
@@ -238,24 +246,58 @@ async def load_segments(edgar: EdgarClient, cik: str, submissions: dict[str, Any
     return segs, None
 
 
+def is_domestic_filer(submissions: dict[str, Any]) -> bool:
+    """True when submissions show any 10-K/10-Q (or no forms at all: don't guess)."""
+    forms = filer_forms(submissions)
+    return not forms or bool(forms & DOMESTIC_FORMS)
+
+
+def empty_financials(ticker: str, cik: str, submissions: dict[str, Any]) -> NormalizedFinancials:
+    """Placeholder for a foreign (20-F/40-F) filer with no usable US-GAAP companyfacts: enough for
+    the classifier to reach its NON_10K_FILER decline."""
+    return NormalizedFinancials(
+        ticker=ticker.upper(),
+        cik=cik,
+        fiscal_year_end_month=fiscal_year_end_month(submissions),
+        income_statements=[],
+        balance_sheets=[],
+        cash_flows=[],
+        accession_number=latest_periodic_accession(submissions) or "",
+    )
+
+
 async def load_company(edgar: EdgarClient, ticker: str, *, with_segments: bool) -> CompanyData:
     cik = await edgar.resolve_cik(ticker)
-    data = await edgar.fetch_company_data(cik)
-    fin = normalize(data.companyfacts, data.submissions, ticker)
+    submissions: dict[str, Any] | None = None
+    companyfacts: dict[str, Any] = {}
+    try:
+        data = await edgar.fetch_company_data(cik)
+        submissions, companyfacts = data.submissions, data.companyfacts
+        fin = normalize(companyfacts, submissions, ticker)
+    except (EdgarNotFound, NormalizationError):
+        # A 20-F/40-F filer has no (or IFRS-only) companyfacts; surface the NON_10K_FILER decline
+        # instead of a misleading "EDGAR not responding" / "no usable 10-K data" failure.
+        if submissions is None:
+            submissions = await edgar.get_submissions(cik)
+        if is_domestic_filer(submissions):
+            raise
+        fin = empty_financials(ticker, cik, submissions)
+        with_segments = False
+    data_submissions = submissions
     extra: list[str] = []
     if with_segments:
-        segs, flag = await load_segments(edgar, cik, data.submissions)
+        segs, flag = await load_segments(edgar, cik, data_submissions)
         if segs:
             fin = fin.model_copy(update={"segments": segs})
         if flag:
             extra.append(flag)
-    name = str(data.submissions.get("name") or ticker.upper())
+    name = str(data_submissions.get("name") or ticker.upper())
     return CompanyData(
         ticker=ticker.upper(),
         cik=cik,
         name=name,
-        submissions=data.submissions,
-        companyfacts=data.companyfacts,
+        submissions=data_submissions,
+        companyfacts=companyfacts,
         financials=fin,
         extra_flags=extra,
     )

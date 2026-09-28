@@ -229,6 +229,10 @@ OIL_UNITS: dict[str, float] = {"MMBbls": 1.0, "MMBbl": 1.0, "MBbls": 1e-3, "MBbl
 GAS_UNITS: dict[str, float] = {"Bcf": 1.0, "MMcf": 1e-3, "Mcf": 1e-6, "Tcf": 1e3}
 
 
+# Cover-page share counts that multi-class issuers report once per class (dimension dropped in companyfacts).
+PER_CLASS_TAGS = frozenset({"EntityCommonStockSharesOutstanding"})
+
+
 class NormalizationError(ValueError):
     """companyfacts has no usable annual (10-K) data."""
 
@@ -397,6 +401,8 @@ class FactIndex:
                     continue
                 self._raw[tag] = (body or {}).get("units") or {}
         self._cache: dict[tuple[str, str, str], Any] = {}
+        # (tag, unit, end) -> number of per-class facts summed into that instant (see instants())
+        self.share_classes: dict[tuple[str, str, date], int] = {}
 
     def has(self, tag: str) -> bool:
         return tag in self._raw
@@ -461,15 +467,48 @@ class FactIndex:
     def instants(self, tag: str, unit: str) -> dict[date, Fact]:
         key = ("inst", tag, unit)
         if key not in self._cache:
+            facts = [f for f in self.facts(tag, unit) if f.start is None]
+            if tag in PER_CLASS_TAGS:
+                facts = self._sum_share_classes(tag, unit, facts)
             out: dict[date, Fact] = {}
-            for f in self.facts(tag, unit):
-                if f.start is not None:
-                    continue
+            for f in facts:
                 cur = out.get(f.end)
                 if cur is None or (f.filed, f.accn) > (cur.filed, cur.accn):
                     out[f.end] = f
             self._cache[key] = out
         return self._cache[key]
+
+    def _sum_share_classes(self, tag: str, unit: str, facts: list[Fact]) -> list[Fact]:
+        """companyfacts drops XBRL dimensions, so a multi-class issuer's cover page (e.g. Alphabet's
+        Class A / B / C) shows up as several facts with the same end date and accession. The company
+        total is their sum; picking any single one understates the share count."""
+        groups: dict[tuple[date, str], list[Fact]] = {}
+        for f in facts:
+            groups.setdefault((f.end, f.accn), []).append(f)
+        out: list[Fact] = []
+        for (end, _accn), group in groups.items():
+            if len(group) == 1:
+                out.append(group[0])
+                continue
+            self.share_classes[(tag, unit, end)] = max(
+                len(group), self.share_classes.get((tag, unit, end), 0)
+            )
+            first = group[0]
+            out.append(
+                Fact(
+                    tag=first.tag,
+                    unit=first.unit,
+                    start=None,
+                    end=end,
+                    val=sum(f.val for f in group),
+                    accn=first.accn,
+                    fy=first.fy,
+                    fp=first.fp,
+                    form=first.form,
+                    filed=max(f.filed for f in group),
+                )
+            )
+        return out
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -592,7 +631,9 @@ class _View:
             for end, f in self.idx.instants(tag, unit).items():
                 delta = (end - when).days
                 if 0 <= delta <= max_days and (best is None or delta < best[0]):
-                    best = (delta, _Val(f.val, tag))
+                    n = self.idx.share_classes.get((tag, unit, end), 1)
+                    note = f"summed across {n} share classes reported separately" if n > 1 else None
+                    best = (delta, _Val(f.val, tag, note))
         return best[1] if best else None
 
 

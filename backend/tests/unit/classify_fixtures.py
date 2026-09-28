@@ -1,7 +1,8 @@
 """Synthetic ClassificationSignals fixtures for the classifier tests.
 
-Numbers are rough, company-*like* approximations (USD) — not recorded EDGAR data. Ticket 14
-reconciles these with the recorded companyfacts/submissions fixtures from the EDGAR ticket.
+Numbers are rough, company-*like* approximations (USD) — not recorded EDGAR data. The same
+expectations are asserted against the EDGAR fixtures through the real classify-job data path in
+``test_fixture_reconciliation.py``.
 """
 
 from __future__ import annotations

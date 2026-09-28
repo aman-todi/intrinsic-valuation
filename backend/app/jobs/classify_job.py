@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -85,7 +86,13 @@ def decline_message(reason: DeclineReason, name: str) -> str:
     return DECLINE_MESSAGES.get(reason, "{name} can't be valued by this app.").format(name=name)
 
 
-def build_signals(company: CompanyData, market: MarketData) -> ClassificationSignals:
+def build_signals(
+    company: CompanyData, market_cap: float | None, *, today: date | None = None
+) -> ClassificationSignals:
+    """Pure: the classifier's input from loaded EDGAR data + the live market cap (no I/O).
+
+    ``today`` pins the "years public" clock (tests); defaults to the current date.
+    """
     sub, cf = company.submissions, company.companyfacts
     return ClassificationSignals(
         company=CompanySnapshot(
@@ -94,14 +101,14 @@ def build_signals(company: CompanyData, market: MarketData) -> ClassificationSig
             name=company.name,
             sic_code=sic(sub),
             sic_description=sic_description(sub),
-            market_cap_usd=market.snapshot.market_cap,
+            market_cap_usd=market_cap,
         ),
         financials=company.financials,
         filer_forms=frozenset(filer_forms(sub)),
         entity_type=entity_type(sub),
         present_tags=frozenset(present_tags(cf)),
         tag_latest_values=latest_annual_values(cf),
-        years_public=years_public(sub),
+        years_public=years_public(sub, today),
         operating_cash_flow_history=operating_cash_flow_history(cf),
     )
 
@@ -174,7 +181,7 @@ async def _classify_body(deps: JobDeps, run_id: UUID, ticker: str) -> dict[str, 
         deps, run_id, stage="market_data", message="Fetched live price and risk-free rate", progress=25
     )
 
-    signals = build_signals(company, market)
+    signals = build_signals(company, market.snapshot.market_cap)
     result = await classify_company(signals, deps.anthropic)
     accession = company.accession
 

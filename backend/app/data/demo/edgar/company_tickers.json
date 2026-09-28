@@ -98,5 +98,15 @@
   "cik_str": 1046179,
   "ticker": "TSM",
   "title": "TAIWAN SEMICONDUCTOR MANUFACTURING CO LTD"
+ },
+ "20": {
+  "cik_str": 104169,
+  "ticker": "WMT",
+  "title": "Walmart Inc."
+ },
+ "21": {
+  "cik_str": 73309,
+  "ticker": "NUE",
+  "title": "NUCOR CORP"
  }
 }
