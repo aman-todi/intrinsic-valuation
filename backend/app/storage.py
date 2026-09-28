@@ -133,8 +133,12 @@ class S3Storage:
     def client(self) -> Any:
         if self._client is None:
             import boto3
+            from botocore.config import Config
 
-            self._client = boto3.client("s3", region_name=self._region)
+            # SigV4 presigned URLs (SigV2 is rejected by newer regions).
+            self._client = boto3.client(
+                "s3", region_name=self._region, config=Config(signature_version="s3v4")
+            )
         return self._client
 
     async def put_bytes(self, key: str, data: bytes, content_type: str | None = None) -> str:

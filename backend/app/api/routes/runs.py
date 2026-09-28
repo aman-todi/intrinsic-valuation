@@ -275,15 +275,16 @@ async def confirm_run(run_id: str, body: ConfirmRunRequest, user: CurrentUser, s
         run.assumptions_edited = True
         run.cache_key = None
 
-    await transition(
-        session,
-        run,
-        RunStatus.BUILDING,
-        stage="queued",
-        message="Build queued" + (" with your edited assumptions (private result)" if edited else ""),
-        progress=51,
-    )
     try:
+        # The status write hits runs_one_active_per_user (at flush) if another run is active.
+        await transition(
+            session,
+            run,
+            RunStatus.BUILDING,
+            stage="queued",
+            message="Build queued" + (" with your edited assumptions (private result)" if edited else ""),
+            progress=51,
+        )
         await session.commit()
     except IntegrityError as exc:
         if _is_active_run_violation(exc):

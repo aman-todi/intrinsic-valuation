@@ -200,9 +200,9 @@ def install_http_mocks(router: respx.MockRouter, signer: Signer) -> dict[str, re
         "tickers": router.get("https://www.sec.gov/files/company_tickers.json").mock(
             return_value=httpx.Response(200, json=load_company_tickers())
         ),
-        "submissions": router.get(url__regex=r"https://data\.sec\.gov/submissions/CIK(?P<cik>\d{10})\.json").mock(
-            side_effect=submissions
-        ),
+        "submissions": router.get(
+            url__regex=r"https://data\.sec\.gov/submissions/CIK(?P<cik>\d{10})\.json"
+        ).mock(side_effect=submissions),
         "companyfacts": router.get(
             url__regex=r"https://data\.sec\.gov/api/xbrl/companyfacts/CIK(?P<cik>\d{10})\.json"
         ).mock(side_effect=companyfacts),
@@ -350,7 +350,9 @@ async def env(
     monkeypatch.setattr(runs_routes, "SSE_POLL_INTERVAL_S", 0.05)
 
     signer = Signer("kid-test")
-    settings = get_settings().model_copy(update={"FRED_API_KEY": "test-fred-key", "RISK_FREE_RATE_OVERRIDE": None})
+    settings = get_settings().model_copy(
+        update={"FRED_API_KEY": "test-fred-key", "RISK_FREE_RATE_OVERRIDE": None}
+    )
 
     with respx.mock(assert_all_called=False, assert_all_mocked=True) as router:
         router.route(host="testserver").pass_through()
