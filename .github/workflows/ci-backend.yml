@@ -73,7 +73,7 @@ jobs:
         run: >-
           .venv/bin/pytest -q -ra
           --cov=app --cov-report=term-missing:skip-covered --cov-report=xml
-          --cov-fail-under=93
+          --cov-fail-under=95
       - name: Coverage gates (valuation / classify / bounds >= 90%)
         run: scripts/check_coverage.sh
       - name: Upload coverage report

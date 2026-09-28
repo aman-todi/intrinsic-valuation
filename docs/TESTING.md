@@ -9,7 +9,7 @@ cd backend
 uv venv -p python3.13 .venv && uv pip install -p .venv -e '.[dev]'
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 .venv/bin/mypy app/valuation app/classify app/assumptions app/schemas app/runs app/data/demo
-.venv/bin/pytest -q --cov=app --cov-fail-under=93     # unit + integration, overall floor
+.venv/bin/pytest -q --cov=app --cov-fail-under=95     # unit + integration, overall floor
 scripts/check_coverage.sh                             # per-package gates (below)
 ```
 
@@ -51,15 +51,18 @@ mismatches between the normalizer and the engines.
 
 | Scope | Gate | Before Ticket 14 | After |
 |---|---|---|---|
-| `app/valuation/*` | ≥ 90% | 95% | see CI |
-| `app/classify/*` | ≥ 90% | 95% | see CI |
-| `app/assumptions/bounds.py` | ≥ 90% | 99% | see CI |
-| overall `app` | `--cov-fail-under=93` | 93% | see CI |
+| `app/valuation/*` | ≥ 90% | 94.2% | 99.0% |
+| `app/classify/*` | ≥ 90% | 95.1% | 99.8% |
+| `app/assumptions/bounds.py` | ≥ 90% | 99.5% | 100% |
+| overall `app` | `--cov-fail-under=95` | 93% | 95.7% |
+
+The "before" figures were measured without greenlet tracing. Part of the overall gain (for example,
+`api/routes/runs.py` went from 59% to 86%) comes from measuring correctly rather than from new tests.
 
 `scripts/check_coverage.sh` enforces the per-package floors from the `.coverage` file that
 `pytest --cov=app` writes. Coverage runs with `concurrency = ["thread", "greenlet"]`
-(`pyproject.toml`), because SQLAlchemy's asyncio layer runs ORM code in greenlets and route or job code
-reached through it would otherwise be under-reported. Raise the overall floor when coverage goes up.
+(`pyproject.toml`), because SQLAlchemy's asyncio layer runs ORM code in greenlets, and route or job
+code reached through it would otherwise be under-reported. Raise the overall floor when coverage goes up.
 Never lower it to get a PR through.
 
 ## Frontend (`frontend/tests/`)
