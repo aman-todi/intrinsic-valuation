@@ -28,8 +28,11 @@ SEGMENT VALUE
         multiple_or_rate reported = the segment WACC actually used.
     approach "ev_ebitda_multiple":
         latest = latest non-TTM segment row (by fiscal_year) for that segment.
-        EBITDA = latest.operating_income + latest.depreciation_amortization (None -> 0);
-                 operating_income None -> ValuationError.
+        EBITDA = latest.operating_income + latest.depreciation_amortization (None -> 0)
+                 when latest.operating_income is not None;
+               = latest.revenue * segment_ebitda_margin when latest.operating_income is
+                 None and segment_ebitda_margin is not None (D&A ignored in this case);
+               otherwise ValuationError.
         value = EBITDA * ev_ebitda_multiple.
     any other approach -> ValuationError.
 
@@ -43,10 +46,10 @@ OPERATING VALUE AND BRIDGE
         equity = EV - total_debt - operating_lease_liability - preferred_equity
                  - minority_interest - pension_deficit (None -> 0)
         value_per_share = equity / consolidated diluted_shares (last income row).
-    implied_ev_ebitda = EV / sum(segment EBITDA) where segment EBITDA (latest segment
-        operating_income + D&A, None D&A -> 0) is available, i.e. over segments whose
-        latest row has operating_income (both approaches); None when no segment has it
-        or the sum is <= 0.
+    implied_ev_ebitda = EV / sum(segment EBITDA) over every segment (either approach)
+        whose EBITDA is available by the ev_ebitda_multiple rule above (operating_income
+        + D&A, else revenue * segment_ebitda_margin if that margin is set); None when no
+        segment has it or the sum is <= 0.
     implied_pb = equity / consolidated total_equity when total_equity > 0 (as FCFF).
     discount_rate = None, terminal_value = None.
     projection_rows: one row per segment, in input order:
@@ -209,10 +212,23 @@ def slice_financials_to_segment(financials: NormalizedFinancials, segment_name: 
     )
 
 
-def latest_segment_ebitda(financials: NormalizedFinancials, segment_name: str) -> float:
-    """Latest segment operating_income + D&A (None D&A -> 0; None op income -> ValuationError)."""
-    latest = _latest_segment_row(financials, segment_name)
-    return latest.operating_income + (latest.depreciation_amortization or 0.0)
+def latest_segment_ebitda(
+    financials: NormalizedFinancials, segment_name: str, ebitda_margin: float | None = None
+) -> float:
+    """Latest segment EBITDA (module docstring, SEGMENT VALUE / ev_ebitda_multiple).
+
+    operating_income + D&A (None D&A -> 0) when the latest row has operating income;
+    otherwise revenue * ``ebitda_margin``; ValuationError when neither is available.
+    """
+    latest = _segment_rows(financials, segment_name)[-1]
+    if latest.operating_income is not None:
+        return latest.operating_income + (latest.depreciation_amortization or 0.0)
+    if ebitda_margin is not None:
+        return latest.revenue * ebitda_margin
+    raise ValuationError(
+        f"segment '{segment_name}' has no operating income for FY{latest.period.fiscal_year} "
+        "and no segment_ebitda_margin"
+    )
 
 
 # --------------------------------------------------------------------------- core math
@@ -264,7 +280,7 @@ def segment_value(
         return SegmentValue(seg.segment_name, APPROACH_FCFF, "FCFF-EV", inp.discount_rate, value)
     if seg.valuation_approach == APPROACH_MULTIPLE:
         multiple = seg.ev_ebitda_multiple + shift.multiple_delta
-        value = latest_segment_ebitda(financials, seg.segment_name) * multiple
+        value = latest_segment_ebitda(financials, seg.segment_name, seg.segment_ebitda_margin) * multiple
         return SegmentValue(seg.segment_name, APPROACH_MULTIPLE, "EBITDA", multiple, value)
     raise ValuationError(
         f"segment '{seg.segment_name}': unknown valuation_approach '{seg.valuation_approach}'"
@@ -292,7 +308,7 @@ def _total_segment_ebitda(financials: NormalizedFinancials, a: SotpAssumptions) 
     total: float | None = None
     for seg in a.segments:
         try:
-            ebitda = latest_segment_ebitda(financials, seg.segment_name)
+            ebitda = latest_segment_ebitda(financials, seg.segment_name, seg.segment_ebitda_margin)
         except ValuationError:
             continue
         total = ebitda if total is None else total + ebitda

@@ -156,6 +156,24 @@ def test_missing_segment_operating_income_raises(approach):
         SotpValuator().compute(fin, market("CONG", 12.0), sotp_assumptions([seg]))
 
 
+def test_multiple_segment_ebitda_margin_fallback():
+    fin = two_segment_co()
+    fin.segments[-1] = segment(2025, "Services", 400.0, None, da=20.0)
+    seg = sotp_segment("Services", "ev_ebitda_multiple", multiple=8.0, ebitda_margin=0.25)
+    res = SotpValuator().compute(fin, market("CONG", 12.0), sotp_assumptions([seg]))
+    # EBITDA = 400 * 0.25 = 100 (D&A ignored) -> 800; equity = 800 + 100 - 300 = 600
+    assert res.projection_rows[0]["value"] == pytest.approx(800.0, rel=REL)
+    assert res.value_per_share == pytest.approx(6.0, rel=REL)
+    assert res.implied_ev_ebitda == pytest.approx(900.0 / 100.0, rel=REL)
+    assert latest_segment_ebitda(fin, "Services", 0.25) == pytest.approx(100.0)
+    # operating income present -> margin ignored, op income + D&A used
+    assert latest_segment_ebitda(two_segment_co(), "Services", 0.25) == 110.0
+    # fcff segments still require operating income, margin or not
+    fseg = sotp_segment("Services", "fcff", fcff=flat_fcff_assumptions(0.2), ebitda_margin=0.25)
+    with pytest.raises(ValuationError):
+        SotpValuator().compute(fin, market("CONG", 12.0), sotp_assumptions([fseg]))
+
+
 def test_fcff_segment_without_assumptions_raises():
     seg = sotp_segment("Industrial", "fcff")
     with pytest.raises(ValuationError):

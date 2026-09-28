@@ -319,9 +319,14 @@ def sotp_segment(
     approach: str,
     multiple: float = 0.0,
     fcff: FCFFAssumptions | None = None,
+    ebitda_margin: float | None = None,
 ) -> SotpSegmentAssumption:
     return SotpSegmentAssumption(
-        segment_name=name, valuation_approach=approach, ev_ebitda_multiple=multiple, fcff_assumptions=fcff
+        segment_name=name,
+        valuation_approach=approach,
+        ev_ebitda_multiple=multiple,
+        fcff_assumptions=fcff,
+        segment_ebitda_margin=ebitda_margin,
     )
 
 
