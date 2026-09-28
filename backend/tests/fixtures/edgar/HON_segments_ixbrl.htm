@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-built inline-XBRL (iXBRL) excerpt of a HON-like 10-K segment note: scaled values (scale=6),
+     comma formatting, a sign="-" fact and a zero-dash fact. -->
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:ix="http://www.xbrl.org/2013/inlineXBRL"
+      xmlns:ixt="http://www.xbrl.org/inlineXBRL/transformation/2020-02-12"
+      xmlns:xbrli="http://www.xbrl.org/2003/instance"
+      xmlns:xbrldi="http://xbrl.org/2006/xbrldi"
+      xmlns:iso4217="http://www.xbrl.org/2003/iso4217"
+      xmlns:us-gaap="http://fasb.org/us-gaap/2024"
+      xmlns:srt="http://fasb.org/srt/2024"
+      xmlns:hon="http://www.honeywell.com/20241231">
+<head><title>hon-20241231</title></head>
+<body>
+<div style="display:none">
+<ix:header>
+  <ix:resources>
+    <xbrli:context id="c-at">
+      <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+        <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:AerospaceTechnologiesMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+      <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+    </xbrli:context>
+    <xbrli:context id="c-ia">
+      <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+        <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:IndustrialAutomationMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+      <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+    </xbrli:context>
+    <xbrli:context id="c-ba">
+      <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+        <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:BuildingAutomationMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+      <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+    </xbrli:context>
+    <xbrli:context id="c-ess">
+      <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+        <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:EnergyAndSustainabilitySolutionsMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+      <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+    </xbrli:context>
+    <xbrli:unit id="usd"><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unit>
+  </ix:resources>
+</ix:header>
+</div>
+<table>
+  <tr><td>Aerospace Technologies</td>
+      <td>$<ix:nonFraction name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" contextRef="c-at" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">15,458</ix:nonFraction></td>
+      <td><ix:nonFraction name="hon:SegmentProfit" contextRef="c-at" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">4,210</ix:nonFraction></td></tr>
+  <tr><td>Industrial Automation</td>
+      <td><ix:nonFraction name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" contextRef="c-ia" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">10,381</ix:nonFraction></td>
+      <td><ix:nonFraction name="hon:SegmentProfit" contextRef="c-ia" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">2,070</ix:nonFraction></td></tr>
+  <tr><td>Building Automation</td>
+      <td><ix:nonFraction name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" contextRef="c-ba" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">6,528</ix:nonFraction></td>
+      <td><ix:nonFraction name="hon:SegmentProfit" contextRef="c-ba" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">1,631</ix:nonFraction></td>
+      <td><ix:nonFraction name="us-gaap:PaymentsToAcquirePropertyPlantAndEquipment" contextRef="c-ba" unitRef="usd" decimals="-6" scale="6" format="ixt:fixed-zero">—</ix:nonFraction></td></tr>
+  <tr><td>Energy and Sustainability Solutions</td>
+      <td><ix:nonFraction name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" contextRef="c-ess" unitRef="usd" decimals="-6" scale="6" format="ixt:num-dot-decimal">6,131</ix:nonFraction></td>
+      <td>(<ix:nonFraction name="us-gaap:OperatingIncomeLoss" contextRef="c-ess" unitRef="usd" decimals="-6" scale="6" sign="-" format="ixt:num-dot-decimal">25</ix:nonFraction>)</td></tr>
+</table>
+</body>
+</html>

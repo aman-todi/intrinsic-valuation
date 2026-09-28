@@ -1,0 +1,102 @@
+{
+ "0": {
+  "cik_str": 320193,
+  "ticker": "AAPL",
+  "title": "Apple Inc."
+ },
+ "1": {
+  "cik_str": 789019,
+  "ticker": "MSFT",
+  "title": "MICROSOFT CORP"
+ },
+ "2": {
+  "cik_str": 1652044,
+  "ticker": "GOOGL",
+  "title": "Alphabet Inc."
+ },
+ "3": {
+  "cik_str": 1652044,
+  "ticker": "GOOG",
+  "title": "Alphabet Inc."
+ },
+ "4": {
+  "cik_str": 1067983,
+  "ticker": "BRK-B",
+  "title": "BERKSHIRE HATHAWAY INC"
+ },
+ "5": {
+  "cik_str": 19617,
+  "ticker": "JPM",
+  "title": "JPMORGAN CHASE & CO"
+ },
+ "6": {
+  "cik_str": 86312,
+  "ticker": "TRV",
+  "title": "TRAVELERS COMPANIES, INC."
+ },
+ "7": {
+  "cik_str": 1099219,
+  "ticker": "MET",
+  "title": "MetLife, Inc."
+ },
+ "8": {
+  "cik_str": 726728,
+  "ticker": "O",
+  "title": "REALTY INCOME CORP"
+ },
+ "9": {
+  "cik_str": 821189,
+  "ticker": "EOG",
+  "title": "EOG RESOURCES INC"
+ },
+ "10": {
+  "cik_str": 773840,
+  "ticker": "HON",
+  "title": "Honeywell International Inc."
+ },
+ "11": {
+  "cik_str": 78003,
+  "ticker": "PFE",
+  "title": "PFIZER INC"
+ },
+ "12": {
+  "cik_str": 1640147,
+  "ticker": "SNOW",
+  "title": "Snowflake Inc."
+ },
+ "13": {
+  "cik_str": 1607678,
+  "ticker": "VKTX",
+  "title": "Viking Therapeutics, Inc."
+ },
+ "14": {
+  "cik_str": 1736297,
+  "ticker": "ALAB",
+  "title": "Astera Labs, Inc."
+ },
+ "15": {
+  "cik_str": 1838803,
+  "ticker": "CVII",
+  "title": "Churchill Capital Corp VII"
+ },
+ "16": {
+  "cik_str": 1061219,
+  "ticker": "EPD",
+  "title": "ENTERPRISE PRODUCTS PARTNERS L.P."
+ },
+ "17": {
+  "cik_str": 1164727,
+  "ticker": "NEM",
+  "title": "NEWMONT Corp /DE/"
+ },
+ "18": {
+  "cik_str": 1326160,
+  "ticker": "DUK",
+  "title": "Duke Energy CORP"
+ },
+ "19": {
+  "cik_str": 1046179,
+  "ticker": "TSM",
+  "title": "TAIWAN SEMICONDUCTOR MANUFACTURING CO LTD"
+ }
+}
