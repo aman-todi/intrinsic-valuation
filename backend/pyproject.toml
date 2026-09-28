@@ -39,7 +39,7 @@ dev = [
   "pypdf>=5.0",
   "ruff>=0.6",
   "mypy>=1.11",
-  "fakeredis>=2.26",
+  "fakeredis[lua]>=2.26",
   "testcontainers[postgres,redis]>=4.8",
   "moto[s3]>=5.0",
 ]

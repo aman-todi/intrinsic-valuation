@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-built HON-like XBRL instance (subset of hon-20241231_htm.xml): 4 reportable segments,
+     FY2024 + FY2023 comparatives, plus contexts the parser must ignore (consolidated, corporate,
+     segment x product axis, quarterly, typed dimension). -->
+<xbrli:xbrl
+    xmlns:xbrli="http://www.xbrl.org/2003/instance"
+    xmlns:xbrldi="http://xbrl.org/2006/xbrldi"
+    xmlns:iso4217="http://www.xbrl.org/2003/iso4217"
+    xmlns:us-gaap="http://fasb.org/us-gaap/2024"
+    xmlns:srt="http://fasb.org/srt/2024"
+    xmlns:dei="http://xbrl.sec.gov/dei/2024"
+    xmlns:hon="http://www.honeywell.com/20241231"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <xbrli:unit id="usd"><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unit>
+
+  <!-- consolidated -->
+  <xbrli:context id="c-1">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+
+  <!-- FY2024 segment contexts (segment axis + ConsolidationItemsAxis=OperatingSegmentsMember) -->
+  <xbrli:context id="c-at-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment>
+        <xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:AerospaceTechnologiesMember</xbrldi:explicitMember>
+        <xbrldi:explicitMember dimension="srt:ConsolidationItemsAxis">us-gaap:OperatingSegmentsMember</xbrldi:explicitMember>
+      </xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="c-ia-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment>
+        <xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:IndustrialAutomationMember</xbrldi:explicitMember>
+      </xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="c-ba-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment>
+        <xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:BuildingAutomationMember</xbrldi:explicitMember>
+      </xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="c-ess-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment>
+        <xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:EnergyAndSustainabilitySolutionsMember</xbrldi:explicitMember>
+      </xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+
+  <!-- FY2023 comparatives -->
+  <xbrli:context id="c-at-23">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:AerospaceTechnologiesMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2023-01-01</xbrli:startDate><xbrli:endDate>2023-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="c-ia-23">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:IndustrialAutomationMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2023-01-01</xbrli:startDate><xbrli:endDate>2023-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="c-ba-23">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:BuildingAutomationMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2023-01-01</xbrli:startDate><xbrli:endDate>2023-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="c-ess-23">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:EnergyAndSustainabilitySolutionsMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2023-01-01</xbrli:startDate><xbrli:endDate>2023-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+
+  <!-- instants for segment assets -->
+  <xbrli:context id="i-at-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:AerospaceTechnologiesMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:instant>2024-12-31</xbrli:instant></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="i-ia-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:IndustrialAutomationMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:instant>2024-12-31</xbrli:instant></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="i-ba-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:BuildingAutomationMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:instant>2024-12-31</xbrli:instant></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="i-ess-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:EnergyAndSustainabilitySolutionsMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:instant>2024-12-31</xbrli:instant></xbrli:period>
+  </xbrli:context>
+
+  <!-- contexts that must be ignored -->
+  <xbrli:context id="c-corp-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">us-gaap:CorporateNonSegmentMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="c-at-product-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment>
+        <xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:AerospaceTechnologiesMember</xbrldi:explicitMember>
+        <xbrldi:explicitMember dimension="srt:ProductOrServiceAxis">us-gaap:ProductMember</xbrldi:explicitMember>
+      </xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2024-01-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="c-at-q4-24">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">0000773840</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">hon:AerospaceTechnologiesMember</xbrldi:explicitMember></xbrli:segment></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2024-10-01</xbrli:startDate><xbrli:endDate>2024-12-31</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+
+  <!-- consolidated facts (ignored) -->
+  <us-gaap:Revenues contextRef="c-1" unitRef="usd" decimals="-6">38498000000</us-gaap:Revenues>
+
+  <!-- FY2024 -->
+  <us-gaap:Revenues contextRef="c-at-24" unitRef="usd" decimals="-6">15458000000</us-gaap:Revenues>
+  <us-gaap:Revenues contextRef="c-ia-24" unitRef="usd" decimals="-6">10381000000</us-gaap:Revenues>
+  <us-gaap:Revenues contextRef="c-ba-24" unitRef="usd" decimals="-6">6528000000</us-gaap:Revenues>
+  <us-gaap:Revenues contextRef="c-ess-24" unitRef="usd" decimals="-6">6131000000</us-gaap:Revenues>
+  <hon:SegmentProfit contextRef="c-at-24" unitRef="usd" decimals="-6">4210000000</hon:SegmentProfit>
+  <hon:SegmentProfit contextRef="c-ia-24" unitRef="usd" decimals="-6">2070000000</hon:SegmentProfit>
+  <hon:SegmentProfit contextRef="c-ba-24" unitRef="usd" decimals="-6">1631000000</hon:SegmentProfit>
+  <hon:SegmentProfit contextRef="c-ess-24" unitRef="usd" decimals="-6">1443000000</hon:SegmentProfit>
+  <us-gaap:DepreciationDepletionAndAmortization contextRef="c-at-24" unitRef="usd" decimals="-6">380000000</us-gaap:DepreciationDepletionAndAmortization>
+  <us-gaap:DepreciationDepletionAndAmortization contextRef="c-ia-24" unitRef="usd" decimals="-6">250000000</us-gaap:DepreciationDepletionAndAmortization>
+  <us-gaap:DepreciationAndAmortization contextRef="c-ia-24" unitRef="usd" decimals="-6">999000000</us-gaap:DepreciationAndAmortization>
+  <us-gaap:DepreciationAndAmortization contextRef="c-ba-24" unitRef="usd" decimals="-6">120000000</us-gaap:DepreciationAndAmortization>
+  <us-gaap:DepreciationDepletionAndAmortization contextRef="c-ess-24" unitRef="usd" decimals="-6">180000000</us-gaap:DepreciationDepletionAndAmortization>
+  <us-gaap:PaymentsToAcquirePropertyPlantAndEquipment contextRef="c-at-24" unitRef="usd" decimals="-6">380000000</us-gaap:PaymentsToAcquirePropertyPlantAndEquipment>
+  <us-gaap:PaymentsToAcquirePropertyPlantAndEquipment contextRef="c-ia-24" unitRef="usd" decimals="-6">180000000</us-gaap:PaymentsToAcquirePropertyPlantAndEquipment>
+  <us-gaap:PaymentsToAcquirePropertyPlantAndEquipment contextRef="c-ba-24" unitRef="usd" decimals="-6">60000000</us-gaap:PaymentsToAcquirePropertyPlantAndEquipment>
+  <us-gaap:PaymentsToAcquirePropertyPlantAndEquipment contextRef="c-ess-24" unitRef="usd" decimals="-6">290000000</us-gaap:PaymentsToAcquirePropertyPlantAndEquipment>
+  <us-gaap:Assets contextRef="i-at-24" unitRef="usd" decimals="-6">16300000000</us-gaap:Assets>
+  <us-gaap:Assets contextRef="i-ia-24" unitRef="usd" decimals="-6">21000000000</us-gaap:Assets>
+  <us-gaap:Assets contextRef="i-ba-24" unitRef="usd" decimals="-6">9600000000</us-gaap:Assets>
+  <us-gaap:Assets contextRef="i-ess-24" unitRef="usd" decimals="-6">8900000000</us-gaap:Assets>
+
+  <!-- FY2023 (revenue + profit only) -->
+  <us-gaap:Revenues contextRef="c-at-23" unitRef="usd" decimals="-6">13624000000</us-gaap:Revenues>
+  <us-gaap:Revenues contextRef="c-ia-23" unitRef="usd" decimals="-6">11470000000</us-gaap:Revenues>
+  <us-gaap:Revenues contextRef="c-ba-23" unitRef="usd" decimals="-6">6002000000</us-gaap:Revenues>
+  <us-gaap:Revenues contextRef="c-ess-23" unitRef="usd" decimals="-6">5566000000</us-gaap:Revenues>
+  <hon:SegmentProfit contextRef="c-at-23" unitRef="usd" decimals="-6">3707000000</hon:SegmentProfit>
+  <hon:SegmentProfit contextRef="c-ia-23" unitRef="usd" decimals="-6">2387000000</hon:SegmentProfit>
+  <hon:SegmentProfit contextRef="c-ba-23" unitRef="usd" decimals="-6">1432000000</hon:SegmentProfit>
+  <hon:SegmentProfit contextRef="c-ess-23" unitRef="usd" decimals="-6">1262000000</hon:SegmentProfit>
+
+  <!-- noise that must be ignored -->
+  <us-gaap:Revenues contextRef="c-corp-24" unitRef="usd" decimals="-6">0</us-gaap:Revenues>
+  <us-gaap:Revenues contextRef="c-at-product-24" unitRef="usd" decimals="-6">9000000000</us-gaap:Revenues>
+  <us-gaap:Revenues contextRef="c-at-q4-24" unitRef="usd" decimals="-6">4089000000</us-gaap:Revenues>
+  <dei:DocumentType contextRef="c-1">10-K</dei:DocumentType>
+</xbrli:xbrl>
