@@ -1585,36 +1585,39 @@ DEV_AUTH_BYPASS=false
 `backend/app/config.py` loads all of this via `pydantic-settings`'s `BaseSettings`, so a missing required var fails fast at startup rather than surfacing as a confusing runtime error mid-run.
 ## 13. Test suite
 
+The suite is deliberately lean: **≤ 200 tests in total** (backend + frontend, each parametrized case counted), one or two strong tests per behavior rather than many near-duplicates, table-driven where a check is genuinely one logical assertion over many inputs. Coverage floors: **backend ≥ 75% overall** and **≥ 85% for `app/valuation`** (the module where a silent bug is most costly), enforced in CI. `docs/TESTING.md` has the per-area inventory and how to run each layer locally.
+
 ### 13.1 Backend (`backend/tests/`)
 
 **Unit (`unit/`)** — no network, no DB, fast:
-- `test_valuation_fcff.py`, `test_valuation_fcfe.py`, `test_valuation_excess_return.py`, `test_valuation_nav_reit.py`, `test_valuation_nav_ep.py`, `test_valuation_sotp.py`: hand-computed expected values against small synthetic `NormalizedFinancials`/`AssumptionsBase` fixtures (spreadsheet-verified by hand once, then pinned as regression tests). Cover edge cases: negative FCFF in year 1, terminal growth approaching WACC (near-singularity guard), zero debt, 100% payout, single-segment SOTP degenerating to plain FCFF.
-- `test_bounds.py`: every rule in `assumptions/bounds.py` — both the "passes" and "violates" side of each check.
-- `test_classify_rules.py`: the full decision tree in `classify/rules.py` against ~20 recorded `CompanySnapshot`/`NormalizedFinancials` fixtures spanning every model type and every decline reason (Apple → FCFF, JPM → excess_return, a P&C insurer → excess_return, O (Realty Income) → nav_reit, EOG → nav_ep, a diversified industrial like HON → sotp-eligible, a pre-revenue biotech → declined, a recent IPO with 2 years of data → declined `INSUFFICIENT_DATA`, a 20-F foreign filer → declined `NON_10K_FILER`).
-- `test_windows.py`: the 5-vs-10-year decision, including both trigger paths (cyclical SIC, margin/revenue volatility) and the default.
-- `test_cache_key.py`: same inputs → same key; any single input changed → different key.
-- `test_edgar_normalize.py`: tag-mapping fallback order, TTM derivation across a non-December fiscal year end, restatement "latest filed wins" logic — all against recorded fixture JSON (§13.3), no live HTTP.
+- **Engine** (`test_valuation_*.py`, `test_valuation_guards.py`, `test_registry.py`): one pinned, hand-computed regression per model type (FCFF mature + early-stage against an independent reference loop, FCFE, excess return, REIT NAV, E&P NAV, SOTP two-segment + single-segment ≡ FCFF); bridge arithmetic, scenario ordering, and grid shape/centre ≡ base once; the near-singularity guard and "undefined scenario/cell → 0 + flag" boundaries.
+- **Excel** (`test_excel_builder.py`): every assumption has a defined name pointing at an editable input, formulas contain no raw assumption literals, and cached formula values equal the engine's numbers — each looping over one case per model type.
+- **Assumptions** (`test_bounds.py`, `test_proposer.py`): table-driven bounds (single-field ranges incl. NaN, cross-field rules, SOTP rules); the propose→validate→repair loop and give-up after `MAX_REPAIR_ATTEMPTS`; SOTP makes one call per segment; the deterministic fallback passes bounds for every model type.
+- **Classifier** (`test_fixture_reconciliation.py`, `test_classify_rules.py`, `test_windows.py`, `test_classify_tiebreak.py`): the 20-ticker EDGAR fixture set runs through the real signal-building path and `classify()` in one table-driven test (every model type and decline reason); every non-declined fixture also runs normalize → fallback proposal → engine and must produce a finite, bounds-valid value; the 5-vs-10-year window triggers; the LLM tiebreak is called only on near-ties.
+- **Data** (`test_edgar_*.py`, `test_fred.py`, `test_market_*.py`, `test_damodaran_*.py`): TTM across a non-December fiscal year end, restatement "latest filed wins", tag fallback, multi-class share summing, 20-F handling, client User-Agent/retries/filing cache, segment parsing; FRED `"."` handling; yfinance retry + typed error; Damodaran parsing, SIC map, snapshot fallback.
+- **Platform** (`test_auth_jwks.py`, `test_storage.py`, `test_state_machine.py`, `test_cancel.py`, `test_cache_key.py`, `test_schemas.py`, `test_demo_mode.py`, `test_worker_settings.py`): JWKS valid/expired/unknown-`kid` refreshes exactly once; storage signing and path safety; allowed state transitions; `run_cancellable`; cache-key sensitivity; assumption schemas are all-required.
 
-**Integration (`integration/`)** — real Postgres (a disposable Supabase branch or a local Postgres in CI, see below), real Redis (via `testcontainers`), mocked external HTTP:
-- `test_run_lifecycle.py`: full state-machine walk for one `auto`-mode run end to end (classify → propose → confirm → build → complete), asserting DB rows and `run_events` at each step, using `respx` to mock EDGAR/yfinance/FRED/Anthropic responses.
-- `test_one_active_run_lock.py`: asserts the second `POST /api/runs` for the same user while one is `building` returns `409`, and succeeds once the first reaches `awaiting_confirm`/`complete`.
-- `test_cache_hit_and_fork.py`: two different users request the same ticker in `auto` mode → second one gets an instant cache hit with no new LLM/EDGAR calls; a third user edits an assumption → gets a private forked result, and the shared cache is unaffected.
-- `test_single_flight_lock.py`: two concurrent uncached requests for the same `cache_key` → only one actually invokes the mocked build pipeline; the other polls and reuses its result.
-- `test_cancel.py`: starts a build with an artificially slowed mock step, cancels mid-flight, asserts the job actually stops (via a monkeypatched sentinel the mock step increments — it must NOT increment past the cancel point), the run lands in `cancelled`, and no `_tmp/` S3 objects are promoted.
-- `test_auth_jwks.py`: a token signed with a test ES256 key validates against a mocked JWKS endpoint; a token with an unknown `kid` triggers exactly one forced refresh, not a retry loop; an expired/garbage token → 401.
-- `test_excel_recalc_verification.py`: **the one integration test that shells out to real `soffice`** (skip with a clear message if `soffice` isn't on the test runner's PATH — CI must install it, see the CI workflow below) — builds a real workbook from a fixture `ValuationResult`, runs `recalc_and_read`, and asserts the recalculated value matches the Python engine's number within tolerance for at least one case per model type.
-- `test_pdf_builder.py`: builds a real PDF from a fixture and asserts it's non-empty, valid PDF magic bytes, and (via `pypdf` text extraction) contains the ticker and value-per-share figure somewhere in the text.
+**Integration (`integration/`)** — real Postgres 16 and Redis (local throwaway instances or CI service containers via `TEST_DATABASE_URL`/`TEST_REDIS_URL`), real `soffice` and WeasyPrint, mocked external HTTP and a fake Anthropic client:
+- `test_db_migrations.py`: migrations apply and downgrade; RLS on every table; the `runs_one_active_per_user` index rejects a second active run.
+- `test_run_lifecycle.py`: one `auto` AAPL run end to end (classify → propose → confirm → build → complete) with real Excel recalc verification and PDF, asserting DB rows, `run_events`, the result endpoint and downloadable files.
+- `test_one_active_run_lock.py`, `test_cache_hit_and_fork.py`, `test_single_flight_lock.py`: 409 lock (create and confirm); second user gets a cache hit with no new build work while an edited run forks privately; concurrent identical builds run the pipeline once (incl. a stale lock).
+- `test_cancel.py`, `test_stale_cancel.py`: cancel mid-build stops at a sentinel with nothing promoted; cancel during proposal, at `awaiting_confirm`, and on worker shutdown; a cancelled-but-never-picked-up run stops blocking new runs.
+- `test_run_routes.py`: 401 on every route, 404 on another user's run, SSE with `?access_token=` and resume, a declined ticker (life insurer), market-data outage, no-LLM deterministic path.
+- `test_excel_recalc_verification.py`: LibreOffice recalculation matches the engine for one case per model type (+ FCFF early-stage), `verify_workbook` catches a mismatch, and editing a named input flows through.
+- `test_pdf_builder.py`: a real PDF per model type contains the ticker and value per share.
+- `test_demo_mode.py`, `test_edgar_rate_limiter.py`: offline demo mode end to end (FCFF and SOTP); the shared Redis rate limiter.
 
-**Fixtures (`fixtures/`)**: recorded (anonymization not needed — SEC filings are public) `companyfacts`/`submissions` JSON for the ~20 tickers used in classifier tests, a snapshot of the parsed Damodaran tables, and a couple of hand-built `NormalizedFinancials` objects for pure-math edge cases that don't need to look like a real company.
+**Fixtures**: the 20-ticker SEC EDGAR fixture set (`companyfacts`/`submissions` JSON in SEC's formats, shipped as app data under `app/data/demo/edgar/` and reused by tests and demo mode), Damodaran-layout spreadsheets under `tests/fixtures/damodaran/`, and small synthetic `NormalizedFinancials` builders for pure-math cases.
 
 ### 13.2 Frontend (`frontend/tests/`)
 
-- **Unit/component (Vitest + RTL)**: `assumptions-form.test.tsx` (renders read-only vs. editable correctly, edits propagate, client-side bound warnings show), `active-run-guard.test.tsx` (blocks the form when an active run exists, unblocks on `awaiting_confirm`), `model-confirm-card.test.tsx`.
-- **E2E (Playwright)**: `run-flow.spec.ts` — sign in (against a test Supabase project or a mocked auth session), enter a ticker, land on the confirm screen (API mocked via Playwright route interception so this doesn't hit real EDGAR/Anthropic), confirm, watch the progress view, land on the result view, download links present. `single-run-lock.spec.ts` — attempting to start a second run while one is active is blocked in the UI.
+- **Unit/component (Vitest + RTL)**: `assumptions-form.test.tsx` (read-only vs. editable, edits stored as decimals, client-side bound warnings, SOTP read-only), `active-run-guard.test.tsx` (locks while classifying/proposing/building, unlocks on `awaiting_confirm`, cross-tab), `model-confirm-card.test.tsx`, `format.test.ts` (formatting, run-status and bound helpers).
+- **E2E (Playwright)** against the MSW-backed mock API: `run-flow.spec.ts` (ticker → confirm → live progress → result with download links; cancel), `single-run-lock.spec.ts` (a building run restores the overlay, 409 redirects to the active run, `awaiting_confirm` does not lock).
 
 ### 13.3 CI (`.github/workflows/ci-backend.yml`, `ci-frontend.yml`)
 
-Backend CI installs `libreoffice-calc` and the WeasyPrint system libs (same apt list as the worker Dockerfile) so the recalc-verification and PDF tests run for real, runs `ruff check`, `mypy`, then `pytest --cov`, spinning up Postgres and Redis as GitHub Actions **service containers** (not the real Supabase project — CI uses a throwaway local Postgres to avoid touching shared/prod data; `DATABASE_URL` in CI points at that service container, and Alembic runs against it before the integration tests). Frontend CI runs `npm run lint`, `npm run test` (Vitest), `npm run build`, and the Playwright suite against a `next start` instance with the API fully mocked.
+Backend CI installs `libreoffice-calc` and the WeasyPrint system libraries (the worker image's apt list) so recalc-verification and PDF tests run for real, starts Postgres 16 and Redis 7 as GitHub Actions service containers (Alembic runs against them before integration tests; CI never touches the Supabase project), then runs `ruff check`, `ruff format --check`, `mypy` on the engine/classifier/assumptions/schemas/runs packages, and `pytest --cov --cov-fail-under=75` plus the `app/valuation ≥ 85%` gate. Frontend CI runs on Node 24: `npm ci`, `npm run lint` (ESLint + `tsc`), Vitest, `npm run build`, and Playwright (Chromium) against a `next start` instance with the API mocked.
+
 ## 14. Setup runbooks (manual, human-in-the-loop)
 
 `docs/DEPLOYMENT.md` is the step-by-step operational runbook; this section lists what each external account must provide. Do these once, roughly in this order. Secrets go into SSM Parameter Store via `infra/scripts/put_ssm_params.sh` (never into Terraform, git, or the image).
@@ -1668,7 +1671,7 @@ No account or key. `SEC_EDGAR_USER_AGENT` must be a real app name + contact emai
 3. `deploy.yml` runs on push to `main` per §11.4.
 ## 15. Ticket breakdown (15 tickets, designed for parallel execution)
 
-**Orchestration model for the parent session:** run **Ticket 1 alone first** and wait for it to merge — everything else imports its schemas and reads its repo layout. Once it's done, launch the **10 tickets in Batch 1 as parallel sessions/subagents** (they only depend on Ticket 1 and on each other's *interfaces*, which are already fully specified in §§4–10 above, so they can be built against those contracts and fixture data without waiting on one another's actual code). Then run Batch 2, 3, 4 in order. Each ticket's own unit tests are part of its deliverable, not deferred to Ticket 14 — Ticket 14 is integration tests, the 20-ticker fixture set, and CI hardening across everything.
+**Orchestration model for the parent session:** run **Ticket 1 alone first** and wait for it to merge — everything else imports its schemas and reads its repo layout. Once it's done, launch the **10 tickets in Batch 1 as parallel sessions/subagents** (they only depend on Ticket 1 and on each other's *interfaces*, which are already fully specified in §§4–10 above, so they can be built against those contracts and fixture data without waiting on one another's actual code). Then run Batch 2, 3, 4 in order. Each ticket's own tests are part of its deliverable, kept within the §13 budget; Ticket 14 owns the 20-ticker fixture set, cross-module reconciliation, and CI hardening.
 
 Every ticket should open its own PR/branch against `main`, include tests, and not merge until its tests pass in CI.
 
@@ -1780,10 +1783,9 @@ Every ticket should open its own PR/branch against `main`, include tests, and no
 
 **Ticket 14 — Test hardening & CI**
 *Depends on: everything (runs last, or continuously alongside others as a living ticket that starts early collecting fixtures and finishes after Batch 3).*
-- Fills out the full 20-ticker fixture set referenced throughout §13.1 (recorded EDGAR JSON for every named example ticker across every model type and decline reason).
-- Raises backend test coverage on `valuation/`, `classify/`, and `assumptions/bounds.py` specifically (these are the modules where a silent bug is most costly) to a high bar (e.g. >90%) — add missing edge cases found along the way.
-- Finalizes `ci-backend.yml`/`ci-frontend.yml` with real coverage gates, the `libreoffice-calc` + WeasyPrint system-dependency install step, and Playwright browser install step.
-- Runs the full test suite against a disposable Supabase branch (if using Supabase's branching feature) or documents why CI stays on a local Postgres container instead.
+- Completes the 20-ticker EDGAR fixture set (every model type and decline reason) and reconciles it with the classifier and engines (§13.1).
+- Keeps the suite within the §13 budget (≤ 200 tests) while meeting the coverage floors (backend ≥ 75%, `app/valuation` ≥ 85%).
+- Finalizes `ci-backend.yml`/`ci-frontend.yml` with the coverage gates, the `libreoffice-calc` + WeasyPrint system-dependency install step, service containers, and the Playwright browser install step; documents in `docs/TESTING.md` why CI uses a local Postgres service container rather than a Supabase branch.
 
 **Ticket 15 — Deployment**
 *Depends on: 1, 11, 12, 13.*
