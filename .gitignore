@@ -16,4 +16,11 @@ frontend/test-results/
 frontend/playwright-report/
 .DS_Store
 .claude/worktrees/
-infra/deploy.env
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+infra/terraform/backend.hcl
+crash.log

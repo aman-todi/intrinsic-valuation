@@ -1,3 +1,5 @@
+# SAQ worker image (LibreOffice for workbook recalculation, WeasyPrint for PDFs). Built for linux/arm64
+# (Graviton EC2); the Debian packages below exist for both arm64 and amd64.
 FROM python:3.13-slim AS base
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
@@ -11,5 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/pyproject.toml ./
 COPY backend/app ./app
 RUN pip install uv && uv pip install --system .
-# SAQ 0.26 CLI: dotted path to the settings dict; -v = INFO logging. SIGTERM handling: see worker_settings.py.
+# SAQ 0.26 CLI: dotted path to the settings dict; -v = INFO logging. SIGTERM handling: see worker_settings.py
+# (docker compose stop_grace_period must exceed WORKER_SHUTDOWN_GRACE_SECONDS).
 CMD ["saq", "app.jobs.worker_settings.settings", "-v"]

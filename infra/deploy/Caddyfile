@@ -1,0 +1,27 @@
+# Caddy in front of the API on the EC2 host (/opt/dcf/caddy/Caddyfile, mounted at /etc/caddy by docker-compose.prod.yml).
+# APP_DOMAIN is the custom API hostname or <eip-with-dashes>.sslip.io; Caddy obtains and renews the
+# certificate itself (HTTP-01 / TLS-ALPN-01 on :80/:443) and redirects HTTP to HTTPS.
+#
+# No access log on purpose: the SSE endpoint carries the user's token as ?access_token= (EventSource
+# cannot send headers), and an access log would persist it. Errors still go to stderr (docker logs).
+{
+	email {$ACME_EMAIL}
+	# Give open SSE streams a moment on config reloads / container stops.
+	grace_period 10s
+}
+
+{$APP_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Everything goes to FastAPI (all routes live under /api). No `encode`: compressing
+	# text/event-stream would buffer the progress stream.
+	reverse_proxy api:8000 {
+		# Flush every write immediately so Server-Sent Events arrive live.
+		flush_interval -1
+	}
+}

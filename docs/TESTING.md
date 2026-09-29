@@ -108,7 +108,7 @@ container for these reasons:
 
 What this does not cover is the behavior of the real Supabase project: its RLS policies under the
 `authenticated` role, the session pooler, and the IPv6-only direct host. Those are checked by the
-deployment smoke test (`docs/DEPLOYMENT.md` §13) and by the RLS sanity query in §2. If the project
+deployment smoke test (`docs/DEPLOYMENT.md` → "A8. Smoke test") and by the RLS sanity query in "A2. Supabase". If the project
 later needs RLS regression tests, add a separate, manually triggered workflow against a Supabase
 branch. Do not make it part of the per-PR gate.
 

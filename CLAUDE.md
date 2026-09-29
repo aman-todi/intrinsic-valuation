@@ -5,7 +5,8 @@ Full build spec: `docs/SPEC.md` (sections referenced as §N below and in code do
 ## Layout
 - `backend/` — FastAPI + SAQ worker, Python 3.13. Package `app`.
 - `frontend/` — Next.js 16 App Router, Tailwind v4, TanStack Query.
-- `infra/` — Dockerfiles, ECS task defs, scripts.
+- `infra/` — Dockerfiles, Terraform (single EC2 host running docker compose), deploy scripts. Frontend on Vercel.
+  Runbook: `docs/DEPLOYMENT.md`.
 
 ## Backend conventions
 - Venv: `cd backend && uv venv -p python3.13 .venv && uv pip install -p .venv -e '.[dev]'`

@@ -1,3 +1,5 @@
+# Next.js standalone image. Production runs the frontend on Vercel; this image is for the local
+# docker-compose.yml (and self-hosting). NEXT_PUBLIC_* values are inlined at build time.
 FROM node:24-slim AS build
 WORKDIR /app
 ARG NEXT_PUBLIC_API_BASE_URL
@@ -13,7 +15,8 @@ RUN npm run build
 
 FROM node:24-slim AS run
 WORKDIR /app
-ENV NODE_ENV=production
+# Bind on all interfaces (Docker sets HOSTNAME to the container id, which server.js would bind to).
+ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public

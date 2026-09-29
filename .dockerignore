@@ -1,0 +1,16 @@
+# Build context for infra/docker/Dockerfile.* (context = repo root). Keeps local deps, caches and
+# secrets out of images and makes laptop builds fast.
+.git
+**/.env
+**/.env.*
+**/node_modules
+**/.next
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.local-storage
+**/.terraform
+**/*.tfstate*
+frontend/test-results
+frontend/playwright-report

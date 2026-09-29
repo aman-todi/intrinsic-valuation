@@ -54,7 +54,10 @@ class Settings(BaseSettings):
     # Job queue (SAQ on Redis)
     SAQ_QUEUE_NAME: str = "dcf"
     WORKER_CONCURRENCY: int = 4
-    WORKER_SHUTDOWN_GRACE_SECONDS: int = 100  # < ECS stopTimeout (120s), see §8.3
+    # SIGTERM drain for in-flight jobs (§8.3). Must stay below the worker container's stop grace
+    # (docker compose stop_grace_period: 90s in infra/deploy/docker-compose.prod.yml) so the cancel +
+    # cleanup path runs before SIGKILL.
+    WORKER_SHUTDOWN_GRACE_SECONDS: int = 60
 
     # Local dev only: used as the risk-free rate when FRED_API_KEY is empty (decimal, e.g. 0.042).
     # Runs using it carry a data-confidence flag. Leave unset in any deployed environment.

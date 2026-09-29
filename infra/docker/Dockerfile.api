@@ -1,3 +1,6 @@
+# API image (uvicorn). Built for linux/arm64 (Graviton EC2) by .github/workflows/deploy.yml and
+# infra/scripts/deploy.sh; also used by the local docker-compose.yml. Migrations run from this image too
+# (`alembic upgrade head`, see infra/scripts/deploy_remote.sh).
 FROM python:3.13-slim AS base
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1

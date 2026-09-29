@@ -1,8 +1,11 @@
 name: deploy
-# Build + push images to ECR, run migrations, roll the ECS services (spec §14.7, Ticket 15).
-# Disabled until the repo variable DEPLOY_ENABLED is 'true' (set it after bootstrap_aws.sh and
-# put_ssm_params.sh have been run and the AWS_ROLE_ARN secret exists) so pushes to main stay green
-# before AWS is provisioned. The frontend is deployed by Vercel's own Git integration, not here.
+# Build the arm64 api + worker images, push them to ECR (tagged with the commit SHA) and roll them out
+# on the EC2 host via SSM Run Command (infra/scripts/deploy.sh -> /opt/dcf/deploy.sh). See
+# docs/DEPLOYMENT.md. The frontend is deployed by Vercel's own Git integration, not here.
+#
+# Disabled until the repository variable DEPLOY_ENABLED is 'true' (set it after `terraform apply` and
+# put_ssm_params.sh, once the AWS_DEPLOY_ROLE_ARN secret exists), so pushes to main stay green before
+# AWS is provisioned.
 
 on:
   push:
@@ -16,6 +19,9 @@ concurrency:
   group: deploy-production
   cancel-in-progress: false
 
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
 jobs:
   skipped:
     if: ${{ vars.DEPLOY_ENABLED != 'true' }}
@@ -23,56 +29,90 @@ jobs:
     steps:
       - name: Deployment not enabled
         run: >-
-          echo "::notice title=Deploy skipped::AWS deploy is disabled. After running
-          infra/scripts/bootstrap_aws.sh + put_ssm_params.sh, add the AWS_ROLE_ARN secret and set the
-          repository variable DEPLOY_ENABLED=true (see docs/DEPLOYMENT.md)."
+          echo "::notice title=Deploy skipped::AWS deploy is disabled. After terraform apply +
+          infra/scripts/put_ssm_params.sh, add the AWS_DEPLOY_ROLE_ARN secret and set the repository
+          variable DEPLOY_ENABLED=true (see docs/DEPLOYMENT.md)."
 
-  deploy:
+  build:
     if: ${{ vars.DEPLOY_ENABLED == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Native arm64 GitHub-hosted runner. Set the repository variable ARM_RUNNER=ubuntu-latest to build
+    # under QEMU emulation instead (slower) if arm64 runners are not available to this repository.
+    runs-on: ${{ vars.ARM_RUNNER || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write # OIDC -> AWS
-    env:
-      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-      S3_BUCKET_NAME: ${{ vars.S3_BUCKET_NAME }}
-      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-      CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
-      SEC_EDGAR_USER_AGENT: ${{ vars.SEC_EDGAR_USER_AGENT }}
-      ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL || 'claude-sonnet-5' }}
-      USE_FARGATE_SPOT: ${{ vars.USE_FARGATE_SPOT || 'false' }}
-      IMAGE_TAG: ${{ github.sha }}
+    strategy:
+      fail-fast: true
+      matrix:
+        image: [api, worker]
     steps:
-      - uses: actions/checkout@v4
-
       - name: Check required configuration
         env:
-          HAS_ROLE: ${{ secrets.AWS_ROLE_ARN != '' }}
+          HAS_ROLE: ${{ secrets.AWS_DEPLOY_ROLE_ARN != '' }}
         run: |
-          missing=()
-          [ "$HAS_ROLE" = "true" ] || missing+=("secret AWS_ROLE_ARN")
-          [ -n "$SUPABASE_URL" ] || missing+=("variable SUPABASE_URL")
-          [ -n "$CORS_ORIGINS" ] || missing+=("variable CORS_ORIGINS")
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error title=Deploy misconfigured::missing ${missing[*]} (Settings -> Secrets and variables -> Actions)"
+          if [ "$HAS_ROLE" != "true" ]; then
+            echo "::error title=Deploy misconfigured::missing secret AWS_DEPLOY_ROLE_ARN (terraform output github_deploy_role_arn)"
             exit 1
           fi
+
+      - uses: actions/checkout@v4
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: dcf-build-${{ matrix.image }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up QEMU (only on non-arm64 runners)
+        if: ${{ runner.arch != 'ARM64' }}
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push dcf-${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/Dockerfile.${{ matrix.image }}
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ steps.ecr.outputs.registry }}/dcf-${{ matrix.image }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           role-session-name: dcf-deploy-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy
-        run: infra/scripts/deploy.sh
+      - name: Deploy to EC2 (SSM Run Command)
+        run: infra/scripts/deploy.sh --skip-build --tag "${{ github.sha }}"
 
       - name: Summary
         if: success()
         run: |
           {
-            echo "### Deployed \`${IMAGE_TAG::12}\`"
-            echo "Images: \`dcf-api:${IMAGE_TAG}\`, \`dcf-worker:${IMAGE_TAG}\` in ${AWS_REGION}"
+            echo "### Deployed \`${GITHUB_SHA::12}\`"
+            echo "Images \`dcf-api:${GITHUB_SHA}\` and \`dcf-worker:${GITHUB_SHA}\` (linux/arm64) in ${AWS_REGION}."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,7 +1,10 @@
-# Local dev. Postgres is the real (free-tier) Supabase project from .env — no local DB container.
+# Local dev. Postgres is the real (free-tier) Supabase project from .env (or a local Postgres), no DB
+# container. Production is different: infra/deploy/docker-compose.prod.yml (caddy + api + worker + redis
+# on EC2, images from ECR) with the frontend on Vercel; see docs/DEPLOYMENT.md.
 services:
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports: ["6379:6379"]
   api:
     build: { context: ., dockerfile: infra/docker/Dockerfile.api }
@@ -15,6 +18,8 @@ services:
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379
+    init: true
+    stop_grace_period: 90s # > WORKER_SHUTDOWN_GRACE_SECONDS (60)
     depends_on: [redis]
   frontend:
     build:
@@ -22,5 +27,8 @@ services:
       dockerfile: infra/docker/Dockerfile.frontend
       args:
         - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+        # Empty = dev auth bypass (needs DEV_AUTH_BYPASS=true on the API and a local Postgres).
+        - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-}
+        - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
     ports: ["3000:3000"]
     depends_on: [api]

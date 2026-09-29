@@ -2,13 +2,16 @@
 
 Spec: `docs/SPEC.md` §10. Node >= 22 locally (CI and Docker use Node 24).
 
+Production: Vercel (Root Directory `frontend`), calling the API cross-origin at `NEXT_PUBLIC_API_BASE_URL`
+(the EC2 host's `https://<api host>`). See `docs/DEPLOYMENT.md` → "A5. Vercel (frontend)".
+
 | Script | What it does |
 |---|---|
 | `npm run dev` | Dev server against `NEXT_PUBLIC_API_BASE_URL` |
 | `npm run dev:mock` | Dev server fully against the in-browser MSW mock API (`mocks/`), dev auth bypass on |
 | `npm run lint` | ESLint + `tsc --noEmit` |
 | `npm run test` | Vitest + React Testing Library (`tests/unit`) |
-| `npm run build` | Production build (`output: "standalone"` for `infra/docker/Dockerfile.frontend`) |
+| `npm run build` | Production build (`output: "standalone"`, used by `infra/docker/Dockerfile.frontend` for local docker compose; harmless on Vercel) |
 | `npm run test:e2e` | Playwright (`tests/e2e`) against `next build && next start`, API mocked via `page.route` |
 
 ## Layout

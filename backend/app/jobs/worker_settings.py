@@ -10,10 +10,11 @@ limiter + raw-response cache over the artifact storage + DB-backed filing-cache 
 ``anthropic_client`` (``None`` without ANTHROPIC_API_KEY -> deterministic proposals/narrative),
 ``market_provider``, ``fred_client`` and ``storage``.
 
-SIGTERM (ECS deploys, §8.3): SAQ stops dequeuing immediately, waits ``shutdown_grace_period_s`` for
-in-flight jobs, then cancels them; our job wrapper treats that cancellation like a user cancel (temp
-prefix deleted, run marked cancelled with a "worker restarted" message). The grace period is kept below
-the ECS ``stopTimeout`` (120s) so the cleanup gets to run before SIGKILL.
+SIGTERM (deploys / ``docker compose stop``, §8.3): SAQ stops dequeuing immediately, waits
+``shutdown_grace_period_s`` for in-flight jobs, then cancels them; our job wrapper treats that
+cancellation like a user cancel (temp prefix deleted, run marked cancelled with a "worker restarted"
+message). The grace period (WORKER_SHUTDOWN_GRACE_SECONDS, 60s) is kept below the worker container's
+``stop_grace_period`` (90s in infra/deploy/docker-compose.prod.yml) so the cleanup runs before SIGKILL.
 """
 
 from __future__ import annotations

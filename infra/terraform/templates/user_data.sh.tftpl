@@ -1,0 +1,56 @@
+#!/bin/bash
+# First-boot provisioning for the DCF app host (Amazon Linux 2023, arm64). Runs once, as root, via
+# cloud-init. It only installs the runtime; the app files (docker-compose.prod.yml, Caddyfile,
+# deploy.sh) arrive with every deploy (infra/scripts/deploy.sh -> SSM Run Command), so changing them
+# never requires replacing the instance. Log: /var/log/cloud-init-output.log
+set -euxo pipefail
+
+AWS_REGION="${aws_region}"
+SWAP_GB="${swap_size_gb}"
+COMPOSE_VERSION="${compose_version}"
+
+# ---- region for the AWS CLI (root + SSM sessions) ----
+mkdir -p /root/.aws
+printf '[default]\nregion = %s\n' "$AWS_REGION" >/root/.aws/config
+echo "export AWS_REGION=$AWS_REGION AWS_DEFAULT_REGION=$AWS_REGION" >/etc/profile.d/aws-region.sh
+
+# ---- swap (t4g.small has 2 GB; LibreOffice builds spike) ----
+if [ "$SWAP_GB" -gt 0 ] && [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=$((SWAP_GB * 1024)) status=none
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap defaults 0 0' >>/etc/fstab
+  echo 'vm.swappiness=10' >/etc/sysctl.d/90-dcf-swap.conf
+  sysctl --system >/dev/null
+fi
+
+# ---- Docker engine + compose plugin ----
+dnf install -y docker
+mkdir -p /etc/docker
+cat >/etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "5" },
+  "live-restore": true
+}
+JSON
+systemctl enable --now docker
+
+mkdir -p /usr/local/lib/docker/cli-plugins
+base="https://github.com/docker/compose/releases/download/$COMPOSE_VERSION"
+curl -fsSL --retry 5 -o /tmp/docker-compose "$base/docker-compose-linux-aarch64"
+curl -fsSL --retry 5 -o /tmp/docker-compose.sha256 "$base/docker-compose-linux-aarch64.sha256"
+(cd /tmp && sed 's#docker-compose-linux-aarch64#docker-compose#' docker-compose.sha256 | sha256sum -c -)
+install -m 0755 /tmp/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+rm -f /tmp/docker-compose /tmp/docker-compose.sha256
+docker compose version
+
+# Shortcut for SSM sessions: `dcf-compose ps`, `dcf-compose logs -f api worker`, ...
+cat >/etc/profile.d/dcf.sh <<'SH'
+alias dcf-compose='sudo docker compose --project-directory /opt/dcf -f /opt/dcf/docker-compose.prod.yml'
+SH
+
+# ---- app directory (filled by the first deploy) ----
+install -d -m 0750 -o root -g root /opt/dcf
+touch /opt/dcf/.provisioned

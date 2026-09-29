@@ -1,0 +1,109 @@
+# Production stack on the single EC2 host (/opt/dcf/docker-compose.prod.yml). Shipped with every deploy
+# by infra/scripts/deploy.sh and run by /opt/dcf/deploy.sh (infra/scripts/deploy_remote.sh).
+# The frontend is on Vercel; this host serves only the API.
+#
+#   internet :80/:443 --> caddy (auto HTTPS) --> api:8000 (uvicorn)
+#                                               worker (SAQ) --> redis:6379 <-- api
+#
+# /opt/dcf/.env is rendered from SSM Parameter Store on each deploy (0600). It is both the containers'
+# env_file (api/worker) and the source for ${...} interpolation below (IMAGE_TAG, ECR_REGISTRY, ...).
+# Values in `environment:` override env_file: they pin what must never differ in production.
+name: dcf
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app-env: &app-env
+  REDIS_URL: redis://redis:6379
+  STORAGE_BACKEND: s3
+  DATA_SOURCE_MODE: live
+  DEV_AUTH_BYPASS: "false"
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+  # Must stay below the worker's stop_grace_period so SAQ can cancel + clean up before SIGKILL (§8.3).
+  WORKER_SHUTDOWN_GRACE_SECONDS: "60"
+
+services:
+  caddy:
+    image: caddy:2.11-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN missing from .env}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL missing from .env}
+    volumes:
+      # A directory mount (not a single file), so a redeployed Caddyfile is visible to `caddy reload`.
+      - ./caddy:/etc/caddy:ro
+      - caddy_data:/data # certificates + ACME account: the only state on the box worth keeping
+      - caddy_config:/config
+    depends_on:
+      - api
+    stop_grace_period: 15s
+    logging: *logging
+
+  api:
+    image: ${ECR_REGISTRY:?ECR_REGISTRY missing from .env}/dcf-api:${IMAGE_TAG:?IMAGE_TAG missing from .env}
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      <<: *app-env
+      # Trust X-Forwarded-* from Caddy (the only thing that can reach :8000; it is not published).
+      FORWARDED_ALLOW_IPS: "*"
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+    # Lets open SSE streams end and in-flight requests finish on redeploy.
+    stop_grace_period: 30s
+    logging: *logging
+
+  worker:
+    image: ${ECR_REGISTRY}/dcf-worker:${IMAGE_TAG}
+    restart: unless-stopped
+    init: true # reaps LibreOffice child processes; forwards SIGTERM to saq
+    env_file: [.env]
+    environment:
+      <<: *app-env
+    depends_on:
+      redis:
+        condition: service_healthy
+    # WORKER_SHUTDOWN_GRACE_SECONDS (60) + 30s for the cancel/cleanup path before SIGKILL.
+    stop_grace_period: 90s
+    logging: *logging
+
+  redis:
+    # Queue, locks, rate limiter and SSE fan-out only; no persistence by design (Postgres + S3 are the
+    # sources of truth). A restart drops queued jobs, which the app tolerates (§11.3).
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *logging
+
+volumes:
+  caddy_data:
+  caddy_config:
