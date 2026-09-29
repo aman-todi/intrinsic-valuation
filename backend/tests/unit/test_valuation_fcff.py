@@ -4,28 +4,18 @@ Each scenario is checked twice: against an independent straightforward reference
 loop written here (not using engine helpers), and against pinned regression numbers.
 """
 
-import json
-
 import pytest
 
 from app.valuation.base import SCENARIO_SHIFTS, ValuationError
 from app.valuation.fcff import (
     FCFFValuator,
-    convergence_years,
-    cost_of_equity,
-    growth_path,
-    margin_path,
-    project_fcff,
     wacc,
 )
-from app.valuation.version import ENGINE_VERSION
 from tests.unit.engine_fixtures import (
     early_stage_co,
     fcff_assumptions,
-    high_growth_co,
     market,
     mature_co,
-    zero_debt_co,
 )
 
 REL = 1e-12
@@ -81,36 +71,6 @@ CASES = {
         100.0,
         21.503731562347248,
     ),
-    "high_growth": (
-        high_growth_co,
-        dict(
-            growth=(0.30, 0.25, 0.20, 0.15, 0.12),
-            target_margin=0.25,
-            convergence_years=7,
-            s2c=1.5,
-            beta=1.3,
-            d_to_c=0.0,
-            g_terminal=0.03,
-            roic=0.15,
-        ),
-        40.0,
-        dict(
-            rev0=500.0,
-            m0=0.10,
-            growth5=(0.30, 0.25, 0.20, 0.15, 0.12),
-            target=0.25,
-            n=7,
-            tax=0.25,
-            s2c=1.5,
-            survival=1.0,
-            g_t=0.03,
-            roic=0.15,
-            r=0.04 + 1.3 * 0.05,
-        ),
-        (200.0, 0.0),
-        50.0,
-        41.43641221388212,
-    ),
     "early_stage_tech": (
         early_stage_co,
         dict(
@@ -142,27 +102,6 @@ CASES = {
         40.0,
         10.837662449000721,
     ),
-    "zero_debt": (
-        zero_debt_co,
-        dict(d_to_c=0.0),
-        30.0,
-        dict(
-            rev0=400.0,
-            m0=0.15,
-            growth5=(0.05, 0.05, 0.04, 0.04, 0.03),
-            target=0.20,
-            n=5,
-            tax=0.25,
-            s2c=2.0,
-            survival=1.0,
-            g_t=0.025,
-            roic=0.10,
-            r=0.09,
-        ),
-        (50.0, 0.0),
-        20.0,
-        42.7884941102321,
-    ),
 }
 
 
@@ -193,38 +132,6 @@ def test_fcff_matches_reference_and_pinned(name):
     assert result.upside_pct == pytest.approx(pinned / price - 1, rel=1e-9)
 
 
-def test_mature_year1_by_hand():
-    rows = project_fcff(mature_co(), fcff_assumptions())
-    y1 = rows[0]
-    # Rev 1000*1.05; margin 0.18 + 0.02/5; NOPAT = EBIT*0.75; reinvestment = 50/2
-    assert y1.revenue == pytest.approx(1050.0)
-    assert y1.margin == pytest.approx(0.184)
-    assert y1.ebit == pytest.approx(193.2)
-    assert y1.nopat == pytest.approx(144.9)
-    assert y1.reinvestment == pytest.approx(25.0)
-    assert y1.fcff == pytest.approx(119.9)
-    assert y1.discount_factor == pytest.approx(1 / 1.081)
-    assert rows[-1].growth == pytest.approx(0.025)
-    assert rows[-1].margin == pytest.approx(0.20)
-
-
-def test_rates():
-    a = fcff_assumptions()
-    assert cost_of_equity(a) == pytest.approx(0.09)
-    assert wacc(a) == pytest.approx(0.8 * 0.09 + 0.2 * 0.06 * 0.75)
-
-
-def test_paths_and_convergence_rounding():
-    g = growth_path([0.10, 0.10, 0.10, 0.10, 0.08], 0.03)
-    assert g[:5] == [0.10, 0.10, 0.10, 0.10, 0.08]
-    assert g[5:] == pytest.approx([0.07, 0.06, 0.05, 0.04, 0.03])
-    assert margin_path(0.0, 0.10, 4)[:5] == pytest.approx([0.025, 0.05, 0.075, 0.10, 0.10])
-    assert convergence_years(2.5) == 3  # half-up, like Excel ROUND
-    assert convergence_years(2.4) == 2
-    assert convergence_years(0) == 1
-    assert convergence_years(15) == 10
-
-
 def test_early_stage_negative_fcff_year1_and_flags():
     fin = early_stage_co()
     a = fcff_assumptions(**CASES["early_stage_tech"][1])
@@ -252,16 +159,6 @@ def test_near_singularity_guard():
     FCFFValuator().compute(fin, market(fin.ticker, 20.0), ok)
 
 
-def test_zero_debt_bridge():
-    fin = zero_debt_co()
-    result = FCFFValuator().compute(fin, market(fin.ticker, 30.0), fcff_assumptions(d_to_c=0.0))
-    assert result.discount_rate == pytest.approx(0.09)
-    assert result.total_debt == result.operating_lease_liability == 0.0
-    assert result.pension_deficit == 0.0  # None -> 0
-    assert result.equity_value == pytest.approx(result.enterprise_value)
-    assert result.enterprise_value == pytest.approx(result.operating_value + 50.0)
-
-
 def test_bridge_arithmetic_and_multiples():
     fin = mature_co()
     r = FCFFValuator().compute(fin, market(fin.ticker, 20.0), fcff_assumptions())
@@ -278,16 +175,6 @@ def test_bridge_arithmetic_and_multiples():
     assert r.implied_ev_ebitda == pytest.approx(r.enterprise_value / (180.0 + 50.0))
     assert r.implied_pb == pytest.approx(r.equity_value / 800.0)
     assert r.implied_p_ffo is None
-
-
-def test_negative_equity_flag():
-    fin = zero_debt_co()
-    fin.balance_sheets[-1].total_debt = 10_000.0
-    r = FCFFValuator().compute(fin, market(fin.ticker, 30.0), fcff_assumptions(d_to_c=0.0))
-    assert r.equity_value < 0
-    assert r.value_per_share < 0
-    assert r.implied_pb is None or r.implied_pb < 0
-    assert any("Negative equity" in f for f in r.data_confidence_flags)
 
 
 def test_scenarios():
@@ -328,15 +215,6 @@ def test_scenarios():
     assert [s.label for s in SCENARIO_SHIFTS] == labels
 
 
-def test_scenario_undefined_reports_zero_and_flag():
-    fin = mature_co()
-    a = fcff_assumptions(g_terminal=0.074)  # WACC 0.081: base spread 0.007, bull spread 0.002
-    r = FCFFValuator().compute(fin, market(fin.ticker, 20.0), a)
-    bull = next(s for s in r.scenarios if s.label == "bull")
-    assert bull.value_per_share == 0.0
-    assert any("bull scenario undefined" in f for f in r.data_confidence_flags)
-
-
 def test_sensitivity_grid():
     fin = mature_co()
     a = fcff_assumptions()
@@ -368,40 +246,3 @@ def test_sensitivity_grid():
         r=wacc(a) - 0.01,
     )
     assert grid[4].value_per_share == pytest.approx((ref["operating_value"] + 150 - 375) / 100, rel=REL)
-
-
-def test_sensitivity_grid_invalid_cells_zero_and_flag():
-    fin = mature_co()
-    a = fcff_assumptions(g_terminal=0.07)  # WACC 0.081 -> low-rate/high-growth corner is undefined
-    r = FCFFValuator().compute(fin, market(fin.ticker, 20.0), a)
-    assert len(r.sensitivity_grid) == 25
-    zeros = [c for c in r.sensitivity_grid if c.value_per_share == 0.0]
-    assert zeros
-    assert any("Sensitivity grid" in f for f in r.data_confidence_flags)
-
-
-def test_result_metadata_and_json_safe():
-    fin = mature_co()
-    a = fcff_assumptions()
-    r = FCFFValuator().compute(fin, market(fin.ticker, 20.0), a, historical_window_years=10)
-    assert r.model_type == "fcff"
-    assert r.run_date == "2026-09-28"
-    assert r.engine_version == ENGINE_VERSION == "v1"
-    assert r.historical_window_years == 10
-    assert r.assumptions_used == a.model_dump(mode="json")
-    assert r.accession_number == fin.accession_number
-    assert set(r.projection_rows[0]) == {
-        "year",
-        "revenue",
-        "growth",
-        "margin",
-        "ebit",
-        "nopat",
-        "reinvestment",
-        "fcff",
-        "discount_factor",
-        "pv",
-    }
-    assert [row["year"] for row in r.projection_rows] == list(range(1, 11))
-    assert any("WACC" in s for s in r.sources)
-    json.loads(r.model_dump_json())

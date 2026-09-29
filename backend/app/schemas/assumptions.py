@@ -147,8 +147,3 @@ LLM_ASSUMPTION_SCHEMAS: tuple[type[BaseModel], ...] = (
     EpNavAssumptions,
     SegmentMultipleAssumptions,
 )
-
-
-def parse_assumptions(model_type: ModelType | str, data: dict) -> BaseModel:
-    """Validate a raw dict against the schema for ``model_type``."""
-    return ASSUMPTION_SCHEMA_BY_MODEL[ModelType(model_type)].model_validate(data)

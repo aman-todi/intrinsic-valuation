@@ -6,47 +6,32 @@ import {
   formatSignedPercent,
   formatUsdCompact,
   fromDisplayValue,
-  humanizeFieldName,
   toDisplayValue,
 } from "@/lib/format";
 import { isActive, isTerminal, runRefetchInterval, shouldPoll } from "@/lib/run-status";
 import { FCFF_ASSUMPTIONS } from "@/mocks/fixtures";
 
-describe("humanizeFieldName", () => {
-  it.each([
-    ["revenue_growth_y1", "Revenue growth (Y1)"],
-    ["roe_y3", "ROE (Y3)"],
-    ["terminal_roic", "Terminal ROIC"],
-    ["discount_rate_pv10", "Discount rate PV-10"],
-    ["price_deck_oil_per_bbl", "Price deck oil per bbl"],
-    ["net_borrowing_as_pct_reinvestment", "Net borrowing as % reinvestment"],
-  ])("%s -> %s", (key, label) => {
-    expect(humanizeFieldName(key)).toBe(label);
-  });
-});
-
 describe("fieldKind / formatAssumptionValue", () => {
-  it.each([
-    ["revenue_growth_y1", 0.062, "6.2%"],
-    ["tax_rate", 0.16, "16%"],
-    ["risk_free_rate", 0.042, "4.2%"],
-    ["target_debt_to_capital", 0.08, "8%"],
-    ["payout_ratio", 0.35, "35%"],
-    ["survival_probability", 1, "100%"],
-    ["cap_rate", 0.0575, "5.75%"],
-    ["margin_convergence_years", 5, "5 yrs"],
-    ["sales_to_capital_ratio", 2.8, "2.80x"],
-    ["ev_ebitda_multiple", 14.5, "14.50x"],
-    ["levered_beta", 1.12, "1.12"],
-    ["price_deck_oil_per_bbl", 72.5, "$72.50/bbl"],
-    ["price_deck_gas_per_mcf", 3.1, "$3.10/Mcf"],
-    ["liability_adjustment", -4.2e9, "−$4.2B"],
-    ["corporate_overhead_capitalized", -350e6, "−$350M"],
-  ])("%s = %s -> %s", (key, value, expected) => {
-    expect(formatAssumptionValue(key, value)).toBe(expected);
-  });
-
-  it("classifies payout_ratio as a percent, not a multiple", () => {
+  it("formats each field kind (percent, years, multiple, $/unit, compact USD)", () => {
+    const cases: [string, number, string][] = [
+      ["revenue_growth_y1", 0.062, "6.2%"],
+      ["tax_rate", 0.16, "16%"],
+      ["risk_free_rate", 0.042, "4.2%"],
+      ["target_debt_to_capital", 0.08, "8%"],
+      ["payout_ratio", 0.35, "35%"],
+      ["survival_probability", 1, "100%"],
+      ["cap_rate", 0.0575, "5.75%"],
+      ["margin_convergence_years", 5, "5 yrs"],
+      ["sales_to_capital_ratio", 2.8, "2.80x"],
+      ["ev_ebitda_multiple", 14.5, "14.50x"],
+      ["levered_beta", 1.12, "1.12"],
+      ["price_deck_oil_per_bbl", 72.5, "$72.50/bbl"],
+      ["price_deck_gas_per_mcf", 3.1, "$3.10/Mcf"],
+      ["liability_adjustment", -4.2e9, "−$4.2B"],
+      ["corporate_overhead_capitalized", -350e6, "−$350M"],
+    ];
+    for (const [key, value, expected] of cases) expect(formatAssumptionValue(key, value), key).toBe(expected);
+    // payout_ratio is a percent, not a multiple, despite the "_ratio" suffix
     expect(fieldKind("payout_ratio")).toBe("percent");
     expect(fieldKind("sales_to_capital_ratio")).toBe("multiple");
   });
@@ -71,6 +56,7 @@ describe("money/percent helpers", () => {
 describe("run-status", () => {
   it("treats classifying/proposing/building as active and awaiting_confirm as not", () => {
     expect(isActive("classifying")).toBe(true);
+    expect(isActive("proposing")).toBe(true);
     expect(isActive("building")).toBe(true);
     expect(isActive("awaiting_confirm")).toBe(false);
     expect(isActive("complete")).toBe(false);

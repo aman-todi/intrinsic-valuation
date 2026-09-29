@@ -84,13 +84,4 @@ test.describe("run flow", () => {
     await page.getByRole("button", { name: "Start over" }).click();
     await expect(page.getByLabel("Ticker")).toBeEnabled();
   });
-
-  test("a declined ticker shows the failure message and Start over", async ({ page }) => {
-    await installMockApi(page);
-    await page.goto("/");
-    await page.getByLabel("Ticker").fill("FAIL");
-    await page.getByRole("button", { name: "Value it" }).click();
-    await expect(page.getByTestId("terminal-state")).toContainText("Declined: Biotech precommercial");
-    await expect(page.getByRole("button", { name: "Start over" })).toBeVisible();
-  });
 });

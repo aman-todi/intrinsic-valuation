@@ -226,20 +226,6 @@ def mature_co() -> NormalizedFinancials:
     )
 
 
-def high_growth_co() -> NormalizedFinancials:
-    """High-growth co. with a TTM base row (revenue 500, 10% margin) and zero debt."""
-    return build_financials(
-        "GRWT",
-        [
-            income(2023, 250.0, 10.0, 5.0, 50.0),
-            income(2024, 400.0, 30.0, 20.0, 50.0),
-            income(2025, 500.0, 50.0, 35.0, 50.0, is_ttm=True),
-        ],
-        [balance(2025, cash=200.0, sti=0.0, debt=0.0, lease=0.0, equity=400.0)],
-        [cash_flow(2024, da=20.0, capex=-60.0, d_nwc=10.0)],
-    )
-
-
 def early_stage_co() -> NormalizedFinancials:
     """Early-stage tech: revenue 200, operating margin -30%, net cash, no debt."""
     return build_financials(
@@ -250,16 +236,6 @@ def early_stage_co() -> NormalizedFinancials:
         ],
         [balance(2025, cash=300.0, sti=20.0, debt=0.0, equity=350.0)],
         [cash_flow(2025, da=10.0, capex=-30.0, d_nwc=5.0)],
-    )
-
-
-def zero_debt_co() -> NormalizedFinancials:
-    """No debt, leases, preferred, minority or pension: equity = operating value + cash."""
-    return build_financials(
-        "ZERO",
-        [income(2025, 400.0, 60.0, 45.0, 20.0)],
-        [balance(2025, cash=40.0, sti=10.0, equity=300.0, pension=None)],
-        [cash_flow(2025, da=15.0, capex=-20.0)],
     )
 
 

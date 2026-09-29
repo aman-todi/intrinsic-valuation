@@ -20,37 +20,30 @@ class FakeSession:
         return None
 
 
-@pytest.mark.parametrize(
-    "a,b",
-    [
-        (S.CLASSIFYING, S.PROPOSING),
-        (S.CLASSIFYING, S.AWAITING_CONFIRM),
-        (S.PROPOSING, S.AWAITING_CONFIRM),
-        (S.AWAITING_CONFIRM, S.BUILDING),
-        (S.BUILDING, S.COMPLETE),
-        (S.BUILDING, S.CANCELLED),
-        (S.CLASSIFYING, S.FAILED),
-        (S.AWAITING_CONFIRM, S.CANCELLED),
-        (S.BUILDING, S.BUILDING),  # in-stage progress
-    ],
-)
-def test_allowed(a, b):
-    assert can_transition(a, b)
+ALLOWED = [
+    (S.CLASSIFYING, S.PROPOSING),
+    (S.CLASSIFYING, S.AWAITING_CONFIRM),
+    (S.PROPOSING, S.AWAITING_CONFIRM),
+    (S.AWAITING_CONFIRM, S.BUILDING),
+    (S.BUILDING, S.COMPLETE),
+    (S.BUILDING, S.CANCELLED),
+    (S.CLASSIFYING, S.FAILED),
+    (S.AWAITING_CONFIRM, S.CANCELLED),
+    (S.BUILDING, S.BUILDING),  # in-stage progress
+]
+DISALLOWED = [
+    (S.CLASSIFYING, S.BUILDING),
+    (S.AWAITING_CONFIRM, S.COMPLETE),
+    (S.BUILDING, S.AWAITING_CONFIRM),
+    (S.COMPLETE, S.CANCELLED),
+    (S.FAILED, S.BUILDING),
+    (S.CANCELLED, S.CANCELLED),
+]
 
 
-@pytest.mark.parametrize(
-    "a,b",
-    [
-        (S.CLASSIFYING, S.BUILDING),
-        (S.AWAITING_CONFIRM, S.COMPLETE),
-        (S.BUILDING, S.AWAITING_CONFIRM),
-        (S.COMPLETE, S.CANCELLED),
-        (S.FAILED, S.BUILDING),
-        (S.CANCELLED, S.CANCELLED),
-    ],
-)
-def test_disallowed(a, b):
-    assert not can_transition(a, b)
+def test_transition_table():
+    assert [(a, b) for a, b in ALLOWED if not can_transition(a, b)] == []
+    assert [(a, b) for a, b in DISALLOWED if can_transition(a, b)] == []
 
 
 async def test_transition_sets_fields_and_appends_event():

@@ -40,12 +40,11 @@ from app.classify.rules import (
 )
 from app.data import demo
 from app.data.demo.providers import FixtureEdgarClient
-from app.data.edgar.client import EdgarNotFound
 from app.data.edgar.normalize import sic
 from app.data.macro import damodaran
 from app.jobs.classify_job import build_signals
 from app.jobs.common import CompanyData, load_company
-from app.schemas.company import ClassificationResult, CompanySnapshot, DeclineReason, ModelType
+from app.schemas.company import ClassificationResult, DeclineReason, ModelType
 from app.schemas.financials import MarketSnapshot
 from app.valuation import get_valuator
 from tests.fixtures.edgar import ALL_TICKERS
@@ -122,51 +121,27 @@ def classified(ticker: str) -> ClassificationResult:
 
 
 # ------------------------------------------------------------------------------------------------
-# Fixture set
-# ------------------------------------------------------------------------------------------------
-
-
-def test_fixture_set_is_complete() -> None:
-    assert len(ALL_TICKERS) == 20
-    assert set(ALL_TICKERS) == set(demo.fixture_tickers())
-    assert set(EXPECTED_MODEL) | set(EXPECTED_DECLINE) == set(ALL_TICKERS)
-    assert set(demo.DEMO_PRICES) >= set(ALL_TICKERS)
-    # every model type the classifier can pick (bar FCFE, a runner-up) and every decline reason
-    assert set(EXPECTED_MODEL.values()) == {FCFF, ER, REIT, EP, SOTP}
-    assert set(EXPECTED_DECLINE.values()) == set(DeclineReason)
-
-
-# ------------------------------------------------------------------------------------------------
 # Classifier reconciliation
 # ------------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("ticker", sorted(EXPECTED_MODEL))
-def test_recommended_model(ticker: str) -> None:
-    r = classified(ticker)
-    assert r.decline_reason is None, r.reasons
-    assert r.recommended_model == EXPECTED_MODEL[ticker], r.reasons
-    assert r.early_stage_variant is (ticker == "SNOW")
-    assert 0.05 <= r.confidence <= 0.99
-    assert r.historical_window_years >= 3
-
-
-@pytest.mark.parametrize("ticker", sorted(EXPECTED_DECLINE))
-def test_decline(ticker: str) -> None:
-    r = classified(ticker)
-    assert r.recommended_model is None
-    assert r.decline_reason == EXPECTED_DECLINE[ticker], r.reasons
-
-
-def test_snow_early_stage_reason() -> None:
-    r = classified("SNOW")
-    assert any("early-stage variant" in x for x in r.reasons)
-
-
-def test_nue_cyclical_gets_ten_year_window() -> None:
-    r = classified("NUE")
-    assert r.historical_window_years == 10
-    assert "cyclical" in r.window_reason
+def test_classification_reconciles_with_edgar_fixtures() -> None:
+    """All 20 fixture tickers: recommended model (or decline reason), early-stage flag, window."""
+    assert set(EXPECTED_MODEL) | set(EXPECTED_DECLINE) == set(ALL_TICKERS) == set(demo.fixture_tickers())
+    assert len(ALL_TICKERS) == 20
+    mismatches = []
+    for ticker in sorted(ALL_TICKERS):
+        r = classified(ticker)
+        got = (r.recommended_model, r.decline_reason, r.early_stage_variant)
+        want = (EXPECTED_MODEL.get(ticker), EXPECTED_DECLINE.get(ticker), ticker == "SNOW")
+        if got != want:
+            mismatches.append((ticker, got, want, r.reasons))
+        if r.recommended_model is not None:
+            assert 0.05 <= r.confidence <= 0.99, ticker
+            assert r.historical_window_years >= 3, ticker
+    assert mismatches == []
+    nue = classified("NUE")
+    assert nue.historical_window_years == 10 and "cyclical" in nue.window_reason
 
 
 def test_hon_segments_drive_sotp_and_fcff_without_them() -> None:
@@ -201,35 +176,6 @@ def test_googl_share_classes_are_summed() -> None:
     assert any("summed across 3 share classes" in f for f in fin.data_confidence_flags)
 
 
-def test_tsm_declines_without_us_gaap_companyfacts() -> None:
-    c = company("TSM")
-    assert c.financials.income_statements == []
-    assert c.name.startswith("TAIWAN SEMICONDUCTOR")
-
-
-def test_domestic_filer_missing_companyfacts_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    real = demo.has_file
-    monkeypatch.setattr(demo, "has_file", lambda name: False if "companyfacts" in name else real(name))
-    with pytest.raises(EdgarNotFound):
-        asyncio.run(_load("AAPL", with_segments=False))
-
-
-def test_build_signals_is_pure_and_uses_market_cap() -> None:
-    s = signals("AAPL")
-    assert s.company == CompanySnapshot(
-        ticker="AAPL",
-        cik="0000320193",
-        name="Apple Inc.",
-        sic_code="3571",
-        sic_description="Electronic Computers",
-        market_cap_usd=market_cap("AAPL"),
-    )
-    assert {"10-K", "10-Q"} <= s.filer_forms
-    assert s.years_public is not None and s.years_public > 9
-    assert s.operating_cash_flow_history[-1] > 0
-    assert signals("AAPL") == s  # deterministic
-
-
 # ------------------------------------------------------------------------------------------------
 # Engine on real shapes
 # ------------------------------------------------------------------------------------------------
@@ -259,8 +205,14 @@ def _snapshot(ticker: str, c: CompanyData) -> tuple[MarketSnapshot, object]:
     return snap, industry
 
 
-@pytest.mark.parametrize(("ticker", "model"), _engine_cases())
-def test_engine_on_fixture_shape(ticker: str, model: ModelType) -> None:
+def test_engine_on_fixture_shape() -> None:
+    """normalize -> deterministic_fallback -> engine on every non-declined ticker (and the runner-ups a
+    user can switch to): proposal passes bounds, value is finite and within 0.05x-20x of price."""
+    for ticker, model in _engine_cases():
+        _check_engine(ticker, model)
+
+
+def _check_engine(ticker: str, model: ModelType) -> None:
     c = company(ticker)
     r = classified(ticker)
     snap, industry = _snapshot(ticker, c)

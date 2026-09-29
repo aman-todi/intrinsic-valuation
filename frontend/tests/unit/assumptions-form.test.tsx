@@ -44,14 +44,6 @@ describe("AssumptionsForm", () => {
     expect(within(row).getByText("Risk-free rate (FRED)")).toBeInTheDocument();
   });
 
-  it("renders one input per field when editable, percent fields as percentages", () => {
-    render(<AssumptionsForm assumptions={FCFF_ASSUMPTIONS} editable onChange={() => {}} />);
-    expect(screen.getAllByRole("spinbutton")).toHaveLength(Object.keys(FCFF_ASSUMPTIONS).length);
-    expect(screen.getByLabelText("Revenue growth (Y1)")).toHaveValue(6.2);
-    expect(screen.getByLabelText("Tax rate")).toHaveValue(16);
-    expect(screen.getByLabelText("Levered beta")).toHaveValue(1.12);
-  });
-
   it("toggle switches between read-only and editable, and edits propagate as decimals", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

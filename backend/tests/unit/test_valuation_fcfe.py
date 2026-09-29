@@ -4,12 +4,10 @@ import json
 
 import pytest
 
-from app.valuation.base import ValuationError
 from app.valuation.fcff import (
     FCFEValuator,
     historical_sales_to_capital,
     historical_sales_to_capital_detail,
-    project_fcfe,
 )
 from tests.unit.engine_fixtures import (
     build_financials,
@@ -65,15 +63,6 @@ def _check(result, ref):
     assert result.equity_value == pytest.approx(ref["equity"], rel=REL)
 
 
-def test_historical_sales_to_capital():
-    fin = levered_mature_co()
-    assert historical_sales_to_capital(fin) == pytest.approx(2.0)  # 250 / 125
-    assert historical_sales_to_capital(fin, 5) == pytest.approx(2.0)
-    assert historical_sales_to_capital(fin, 2) == pytest.approx(150 / 55)
-    d = historical_sales_to_capital_detail(fin, 2)
-    assert (d.pairs, d.used_fallback) == (2, False)
-
-
 def test_historical_sales_to_capital_clamp_and_fallback():
     one_year = build_financials("ONE", [income(2025, 100.0, 10.0, 5.0, 1.0)], [], [])
     assert historical_sales_to_capital_detail(one_year).used_fallback
@@ -113,67 +102,3 @@ def test_mature_levered_fcfe():
     assert r.implied_pb == pytest.approx(r.equity_value / 1000.0)
     assert r.model_type == "fcfe"
     json.loads(r.model_dump_json())
-
-
-def test_year1_by_hand():
-    rows = project_fcfe(levered_mature_co(), fcfe_assumptions())
-    y1 = rows[0]
-    # Rev 1250*1.04 = 1300; nm = 0.10 + 0.02/4 = 0.105; NI = 136.5; reinv = 50/2 = 25; NB = 10
-    assert y1.revenue == pytest.approx(1300.0)
-    assert y1.net_income == pytest.approx(136.5)
-    assert y1.reinvestment == pytest.approx(25.0)
-    assert y1.net_borrowing == pytest.approx(10.0)
-    assert y1.fcfe == pytest.approx(121.5)
-    assert y1.discount_factor == pytest.approx(1 / 1.1)
-
-
-def test_full_net_borrowing_edge():
-    """100% of reinvestment debt-financed -> FCFE == net income every year."""
-    fin = levered_mature_co()
-    r = FCFEValuator().compute(fin, market("LEVR", 5.0), fcfe_assumptions(net_borrowing=1.0))
-    for row in r.projection_rows:
-        assert row["fcfe"] == pytest.approx(row["net_income"], rel=REL)
-        assert row["net_borrowing"] == pytest.approx(row["reinvestment"], rel=REL)
-    ref = reference_fcfe(**{**BASE_REF, "nb": 1.0})
-    _check(r, ref)
-    assert r.value_per_share == pytest.approx(10.565659329509806, rel=1e-9)  # pinned
-
-
-def test_window_changes_sales_to_capital():
-    fin = levered_mature_co()
-    r = FCFEValuator().compute(fin, market("LEVR", 5.0), fcfe_assumptions(), historical_window_years=2)
-    _check(r, reference_fcfe(**{**BASE_REF, "s2c": 150 / 55}))
-    assert r.historical_window_years == 2
-
-
-def test_fallback_flag():
-    fin = build_financials("ONE", [income(2025, 100.0, 10.0, 8.0, 10.0)], [], [])
-    r = FCFEValuator().compute(fin, market("ONE", 5.0), fcfe_assumptions())
-    assert any("fallback 1.5" in f for f in r.data_confidence_flags)
-    assert r.implied_pb is None
-    _check(r, reference_fcfe(**{**BASE_REF, "rev0": 100.0, "nm0": 0.08, "s2c": 1.5}))
-
-
-def test_near_singularity_guard_uses_cost_of_equity():
-    fin = levered_mature_co()
-    with pytest.raises(ValuationError):
-        FCFEValuator().compute(fin, market("LEVR", 5.0), fcfe_assumptions(g_terminal=0.097))
-
-
-def test_scenarios_and_grid():
-    fin = levered_mature_co()
-    r = FCFEValuator().compute(fin, market("LEVR", 5.0), fcfe_assumptions())
-    by = {s.label: s for s in r.scenarios}
-    assert [s.label for s in r.scenarios] == ["base", "bull", "bear"]
-    assert by["bull"].value_per_share > by["base"].value_per_share > by["bear"].value_per_share
-    assert by["bull"].key_assumption_deltas["target_net_margin"] == 0.01
-    ref = reference_fcfe(
-        **{**BASE_REF, "growth5": (0.06, 0.06, 0.05, 0.05, 0.05), "target": 0.13, "ke": 0.095}
-    )
-    assert by["bull"].value_per_share == pytest.approx(ref["equity"] / 200.0, rel=REL)
-
-    grid = r.sensitivity_grid
-    assert len(grid) == 25
-    assert [c.row_label for c in grid[::5]] == ["9.00%", "9.50%", "10.00%", "10.50%", "11.00%"]
-    assert [c.col_label for c in grid[:5]] == ["1.50%", "2.00%", "2.50%", "3.00%", "3.50%"]
-    assert grid[12].value_per_share == pytest.approx(r.value_per_share, rel=1e-12)

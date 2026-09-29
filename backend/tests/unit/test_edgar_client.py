@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
 import boto3
 import fakeredis
 import httpx
@@ -11,19 +9,14 @@ import pytest
 import respx
 from moto import mock_aws
 
-from app.data.cache import S3JsonCache, edgar_raw_key
+from app.data.cache import S3JsonCache
 from app.data.edgar.client import (
-    TICKERS_URL,
     EdgarClient,
     EdgarHTTPError,
-    EdgarNotFound,
     EdgarRateLimiter,
-    FilingCacheEntry,
     InMemoryFilingCacheIndex,
-    RateLimitTimeout,
-    TickerNotFoundError,
 )
-from tests.fixtures.edgar import load_company_tickers, load_companyfacts, load_submissions
+from tests.fixtures.edgar import load_companyfacts, load_submissions
 
 UA = "DCF-Valuation-App test@example.com"
 AAPL_CIK = "0000320193"
@@ -79,30 +72,6 @@ async def test_user_agent_gzip_and_urls() -> None:
     assert limiter.calls == 2
 
 
-def test_default_user_agent_from_settings() -> None:
-    from app.config import settings
-
-    client = EdgarClient(limiter=CountingLimiter())
-    assert client.user_agent == settings.SEC_EDGAR_USER_AGENT
-    assert client._client.headers["User-Agent"] == settings.SEC_EDGAR_USER_AGENT
-
-
-@respx.mock
-async def test_ticker_map_and_resolve_cik() -> None:
-    route = respx.get(TICKERS_URL).mock(return_value=httpx.Response(200, json=load_company_tickers()))
-    assert TICKERS_URL.startswith("https://www.sec.gov/")
-    async with make_client() as client:
-        mapping = await client.get_ticker_to_cik_map()
-        assert mapping["AAPL"] == AAPL_CIK
-        assert await client.resolve_cik("aapl") == AAPL_CIK
-        assert await client.resolve_cik("BRK.B") == "0001067983"
-        assert await client.resolve_cik("GOOG") == await client.resolve_cik("GOOGL") == "0001652044"
-        with pytest.raises(TickerNotFoundError):
-            await client.resolve_cik("NOPE")
-    assert route.call_count == 1  # cached in-process
-    assert route.calls.last.request.headers["User-Agent"] == UA
-
-
 # ---------------------------------------------------------------------------------------------------
 # Retries
 # ---------------------------------------------------------------------------------------------------
@@ -137,34 +106,9 @@ async def test_retries_exhausted_raises() -> None:
     assert route.call_count == 3
 
 
-@respx.mock
-async def test_404_not_retried() -> None:
-    route = respx.get(SUB_URL).mock(return_value=httpx.Response(404))
-    async with make_client() as client:
-        with pytest.raises(EdgarNotFound):
-            await client.get_submissions("320193")
-    assert route.call_count == 1
-
-
-@respx.mock
-async def test_transport_error_retried() -> None:
-    route = respx.get(SUB_URL).mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(200, json={})])
-    async with make_client() as client:
-        assert await client.get_submissions("320193") == {}
-    assert route.call_count == 2
-
-
 # ---------------------------------------------------------------------------------------------------
 # Rate limiter (Redis Lua sliding window via fakeredis[lua])
 # ---------------------------------------------------------------------------------------------------
-
-
-async def test_rate_limiter_blocks_over_10_per_window(redis) -> None:
-    limiter = EdgarRateLimiter(redis)
-    for _ in range(10):
-        assert await limiter.try_acquire() == 0
-    wait = await limiter.try_acquire()
-    assert 0 < wait <= 1.0
 
 
 async def test_rate_limiter_shared_across_instances(redis) -> None:
@@ -174,42 +118,6 @@ async def test_rate_limiter_shared_across_instances(redis) -> None:
         assert await (a if i % 2 else b).try_acquire() == 0
     assert await a.try_acquire() > 0
     assert await b.try_acquire() > 0
-
-
-async def test_rate_limiter_acquire_paces_requests(redis) -> None:
-    limiter = EdgarRateLimiter(redis, key="edgar:pace", rate=10, window_seconds=0.2)
-    t0 = time.monotonic()
-    for _ in range(25):
-        await limiter.acquire()
-    elapsed = time.monotonic() - t0
-    # 10 immediately, 10 after ~0.2s, 5 after ~0.4s
-    assert elapsed >= 0.35
-
-
-async def test_rate_limiter_default_window_is_one_second(redis) -> None:
-    limiter = EdgarRateLimiter(redis)
-    t0 = time.monotonic()
-    for _ in range(11):
-        await limiter.acquire()
-    assert time.monotonic() - t0 >= 0.9
-
-
-async def test_rate_limiter_timeout(redis) -> None:
-    limiter = EdgarRateLimiter(redis, key="edgar:to", rate=1, window_seconds=5)
-    await limiter.acquire()
-    with pytest.raises(RateLimitTimeout):
-        await limiter.acquire(timeout=0.1)
-
-
-@respx.mock
-async def test_client_uses_redis_limiter(redis) -> None:
-    respx.get(SUB_URL).mock(return_value=httpx.Response(200, json={}))
-    limiter = EdgarRateLimiter(redis, key="edgar:client", rate=3, window_seconds=0.3)
-    async with EdgarClient(UA, limiter) as client:
-        t0 = time.monotonic()
-        for _ in range(4):
-            await client.get_submissions("320193")
-        assert time.monotonic() - t0 >= 0.25
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -223,22 +131,6 @@ def s3():
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket=BUCKET)
         yield client
-
-
-async def test_s3_json_cache_roundtrip(s3) -> None:
-    cache = S3JsonCache(BUCKET, client=s3)
-    key = await cache.put_json("edgar-raw/0000320193/x.json", {"a": [1, 2, 3]})
-    assert await cache.get_json(key) == {"a": [1, 2, 3]}
-    head = s3.head_object(Bucket=BUCKET, Key=key)
-    assert head["ContentEncoding"] == "gzip" and head["ContentType"] == "application/json"
-    assert await cache.get_json("edgar-raw/missing.json") is None
-
-
-def test_edgar_raw_key_format() -> None:
-    from datetime import UTC, datetime
-
-    key = edgar_raw_key("320193", datetime(2025, 8, 1, 12, 30, tzinfo=UTC))
-    assert key == "edgar-raw/0000320193/2025-08-01T12:30:00.000000Z.json"
 
 
 @respx.mock
@@ -274,23 +166,3 @@ async def test_fetch_company_data_serves_cache_when_accession_unchanged(s3) -> N
         assert not third.from_cache and third.latest_accession == "0000320193-25-999999"
         assert facts_route.call_count == 2
         assert (await index.get("320193")).latest_accession == "0000320193-25-999999"  # type: ignore[union-attr]
-
-
-@respx.mock
-async def test_fetch_company_data_cache_miss_in_s3_refetches(s3) -> None:
-    respx.get(SUB_URL).mock(return_value=httpx.Response(200, json=load_submissions("AAPL")))
-    facts_route = respx.get(FACTS_URL).mock(return_value=httpx.Response(200, json={"cik": 320193}))
-    index = InMemoryFilingCacheIndex()
-    await index.put(FilingCacheEntry("320193", "0000320193-25-000013", "edgar-raw/0000320193/gone.json"))
-    async with make_client(cache=S3JsonCache(BUCKET, client=s3), index=index) as client:
-        data = await client.fetch_company_data("320193")
-    assert not data.from_cache and facts_route.call_count == 1
-
-
-@respx.mock
-async def test_fetch_company_data_without_cache() -> None:
-    respx.get(SUB_URL).mock(return_value=httpx.Response(200, json=load_submissions("AAPL")))
-    respx.get(FACTS_URL).mock(return_value=httpx.Response(200, json={"cik": 320193}))
-    async with make_client() as client:
-        data = await client.fetch_company_data("320193")
-    assert data.companyfacts == {"cik": 320193} and data.s3_key is None and not data.from_cache

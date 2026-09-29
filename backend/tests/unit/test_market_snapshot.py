@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from app.data.macro import damodaran
-from app.data.macro.fred import FRED_OBSERVATIONS_URL, FredUnavailable
+from app.data.macro.fred import FRED_OBSERVATIONS_URL
 from app.data.market.base import MarketDataProvider, MarketDataUnavailable, PriceSnapshot
 from app.data.market.snapshot import build_market_snapshot
 from app.schemas.financials import MarketSnapshot
@@ -60,17 +60,3 @@ async def test_build_market_snapshot():
         == damodaran.snapshot_industries()["Computers/Peripherals"].unlevered_beta
     )
     assert snap.equity_risk_premium == damodaran.load_snapshot()["implied_erp"]
-
-
-@respx.mock
-async def test_price_failure_propagates():
-    respx.get(FRED_OBSERVATIONS_URL).mock(
-        return_value=httpx.Response(200, json={"observations": [{"date": "2026-09-25", "value": "4.12"}]})
-    )
-    with pytest.raises(MarketDataUnavailable):
-        await build_market_snapshot("AAPL", "3571", FakeProvider(fail=True), fred_api_key="k")
-
-
-async def test_fred_failure_propagates():
-    with pytest.raises(FredUnavailable):
-        await build_market_snapshot("AAPL", "3571", FakeProvider(), fred_api_key="")

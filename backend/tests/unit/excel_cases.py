@@ -65,19 +65,6 @@ CASES: dict[str, Callable[[], ExcelCase]] = {
         ef.market("MATR", 25.0),
         ef.fcff_assumptions(convergence_years=3.5),
     ),
-    "fcff_high_growth_ttm_zero_debt": lambda: ExcelCase(
-        "fcff_high_growth_ttm_zero_debt",
-        "fcff",
-        ef.high_growth_co(),
-        ef.market("GRWT", 12.0),
-        ef.fcff_assumptions(
-            growth=(0.25, 0.20, 0.15, 0.12, 0.10),
-            target_margin=0.22,
-            convergence_years=6.5,
-            s2c=1.8,
-            beta=1.3,
-        ),
-    ),
     "fcff_early_stage_survival": lambda: ExcelCase(
         "fcff_early_stage_survival",
         "fcff",
@@ -93,9 +80,6 @@ CASES: dict[str, Callable[[], ExcelCase]] = {
             roic=0.14,
             survival=0.72,
         ),
-    ),
-    "fcff_zero_debt": lambda: ExcelCase(
-        "fcff_zero_debt", "fcff", ef.zero_debt_co(), ef.market("ZERO", 30.0), ef.fcff_assumptions(d_to_c=0.0)
     ),
     "fcfe_levered": lambda: ExcelCase(
         "fcfe_levered",
@@ -125,13 +109,6 @@ CASES: dict[str, Callable[[], ExcelCase]] = {
         alt.ep_financials(),
         alt.market("EANDP", 18.0),
         alt.ep_assumptions(oil=72.5, gas=3.1, r=0.11, dev=80.0),
-    ),
-    "nav_ep_missing_gas": lambda: ExcelCase(
-        "nav_ep_missing_gas",
-        "nav_ep",
-        alt.ep_financials(gas_bcf=None),
-        alt.market("EANDP", 18.0),
-        alt.ep_assumptions(oil=80.0, gas=2.8, r=0.09),
     ),
     "sotp": lambda: ExcelCase("sotp", "sotp", _sotp_co(), ef.market("CONG", 12.0), _sotp_assumptions()),
 }

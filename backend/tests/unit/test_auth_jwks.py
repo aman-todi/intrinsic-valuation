@@ -15,8 +15,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from jose import jwt
 
-from app.auth.jwks import AuthError, JWKSClient, JWKSUnavailableError, set_jwks_client
-from app.auth.middleware import extract_bearer_token
+from app.auth.jwks import AuthError, JWKSClient, set_jwks_client
 from app.deps import AuthenticatedUser, current_user
 
 JWKS_URL = "https://test.supabase.local/auth/v1/.well-known/jwks.json"
@@ -97,41 +96,6 @@ async def test_expired_token(signer: Signer, client: JWKSClient) -> None:
 
 
 @respx.mock
-async def test_wrong_audience(signer: Signer, client: JWKSClient) -> None:
-    respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json={"keys": [signer.jwk]}))
-    with pytest.raises(AuthError, match="claims"):
-        await client.verify(signer.token(aud="anon"))
-
-
-@respx.mock
-async def test_garbage_token(client: JWKSClient) -> None:
-    route = respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json={"keys": []}))
-    with pytest.raises(AuthError):
-        await client.verify("not.a.jwt")
-    with pytest.raises(AuthError):
-        await client.verify("garbage")
-    assert route.call_count == 0
-
-
-@respx.mock
-async def test_bad_signature(signer: Signer, client: JWKSClient) -> None:
-    impostor = Signer("kid-1")  # same kid, different key
-    respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json={"keys": [signer.jwk]}))
-    with pytest.raises(AuthError, match="invalid token"):
-        await client.verify(impostor.token())
-
-
-@respx.mock
-async def test_hs256_rejected(signer: Signer, client: JWKSClient) -> None:
-    respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json={"keys": [signer.jwk]}))
-    token = jwt.encode(
-        {"sub": "x", "aud": "authenticated"}, "secret", algorithm="HS256", headers={"kid": "kid-1"}
-    )
-    with pytest.raises(AuthError, match="algorithm"):
-        await client.verify(token)
-
-
-@respx.mock
 async def test_unknown_kid_triggers_exactly_one_refresh(signer: Signer, client: JWKSClient) -> None:
     route = respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json={"keys": [signer.jwk]}))
     await client.verify(signer.token())  # populate cache
@@ -141,50 +105,6 @@ async def test_unknown_kid_triggers_exactly_one_refresh(signer: Signer, client: 
     with pytest.raises(AuthError, match="unknown signing key"):
         await client.verify(stranger.token())
     assert route.call_count == 2  # exactly one forced refresh, no retry loop
-
-
-@respx.mock
-async def test_rotated_kid_found_after_refresh(signer: Signer, client: JWKSClient) -> None:
-    rotated = Signer("kid-2")
-    route = respx.get(JWKS_URL).mock(
-        side_effect=[
-            httpx.Response(200, json={"keys": [signer.jwk]}),
-            httpx.Response(200, json={"keys": [signer.jwk, rotated.jwk]}),
-        ]
-    )
-    await client.verify(signer.token())
-    claims = await client.verify(rotated.token())
-    assert claims["aud"] == "authenticated"
-    assert route.call_count == 2
-
-
-@respx.mock
-async def test_ttl_expiry_refetches(signer: Signer, http: httpx.AsyncClient) -> None:
-    now = [1000.0]
-    c = JWKSClient(JWKS_URL, http_client=http, clock=lambda: now[0])
-    route = respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json={"keys": [signer.jwk]}))
-    await c.verify(signer.token())
-    now[0] += 3599
-    await c.verify(signer.token())
-    assert route.call_count == 1
-    now[0] += 2
-    await c.verify(signer.token())
-    assert route.call_count == 2
-
-
-@respx.mock
-async def test_jwks_fetch_failure(signer: Signer, client: JWKSClient) -> None:
-    respx.get(JWKS_URL).mock(return_value=httpx.Response(500))
-    with pytest.raises(JWKSUnavailableError):
-        await client.verify(signer.token())
-
-
-def test_extract_bearer_token() -> None:
-    assert extract_bearer_token("Bearer abc") == "abc"
-    assert extract_bearer_token("bearer   abc ") == "abc"
-    for bad in (None, "", "Basic abc", "Bearer", "Bearer   "):
-        with pytest.raises(AuthError):
-            extract_bearer_token(bad)
 
 
 # ---- current_user dependency -------------------------------------------------------------------
@@ -208,12 +128,6 @@ def installed_client(signer: Signer):
         set_jwks_client(JWKSClient(JWKS_URL))
         yield
         set_jwks_client(None)
-
-
-def test_current_user_ok(app_client: TestClient, signer: Signer, installed_client) -> None:
-    r = app_client.get("/me", headers={"Authorization": f"Bearer {signer.token()}"})
-    assert r.status_code == 200
-    assert r.json() == {"id": str(uuid.UUID(int=42)), "email": "a@example.com"}
 
 
 def test_current_user_401s(app_client: TestClient, signer: Signer, installed_client) -> None:

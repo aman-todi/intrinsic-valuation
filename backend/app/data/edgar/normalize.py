@@ -317,16 +317,6 @@ def fiscal_year_end_month(submissions: Mapping[str, Any]) -> int:
     return month if 1 <= month <= 12 else 12
 
 
-def latest_value(companyfacts: Mapping[str, Any], tag: str, unit: str = USD) -> float | None:
-    """Latest reported value (by period end, then filed) for a tag across periodic forms — for quick
-    materiality checks in the classifier."""
-    facts = FactIndex(companyfacts).facts(tag, unit)
-    if not facts:
-        return None
-    best = max(facts, key=lambda f: (f.end, f.filed))
-    return best.val
-
-
 def latest_annual_values(
     companyfacts: Mapping[str, Any], tags: Iterable[str] | None = None
 ) -> dict[str, float]:

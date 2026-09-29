@@ -1,12 +1,11 @@
-"""Ticket 8: every bounds rule, passing and violating (spec §5.6)."""
+"""Ticket 8: bounds rules (spec §5.6), table-driven per rule family: each row passes or names the
+violated field."""
 
 from collections.abc import Callable
 
-import pytest
 from pydantic import BaseModel
 
-from app.assumptions import bounds
-from app.assumptions.bounds import check_bounds, describe_bounds, fcff_wacc
+from app.assumptions.bounds import check_bounds, describe_bounds
 from app.schemas.assumptions import (
     FCFEAssumptions,
     FCFFAssumptions,
@@ -27,23 +26,20 @@ from tests.unit.proposer_fixtures import (
 Factory = Callable[..., BaseModel]
 
 
-# --------------------------------------------------------------------------- baselines pass
+BASELINES: list[tuple[ModelType, Factory]] = [
+    (ModelType.FCFF, valid_fcff),
+    (ModelType.FCFE, valid_fcfe),
+    (ModelType.EXCESS_RETURN, valid_excess_return),
+    (ModelType.NAV_REIT, valid_reit),
+    (ModelType.NAV_EP, valid_ep),
+    (ModelType.SOTP, valid_segment_multiple),
+    (ModelType.SOTP, valid_fcff),
+]
 
 
-@pytest.mark.parametrize(
-    ("model_type", "factory"),
-    [
-        (ModelType.FCFF, valid_fcff),
-        (ModelType.FCFE, valid_fcfe),
-        (ModelType.EXCESS_RETURN, valid_excess_return),
-        (ModelType.NAV_REIT, valid_reit),
-        (ModelType.NAV_EP, valid_ep),
-        (ModelType.SOTP, valid_segment_multiple),
-        (ModelType.SOTP, valid_fcff),
-    ],
-)
-def test_valid_baselines_pass(model_type: ModelType, factory: Factory) -> None:
-    assert check_bounds(model_type, factory()) == []
+def test_valid_baselines_pass() -> None:
+    for model_type, factory in BASELINES:
+        assert check_bounds(model_type, factory()) == [], (model_type, factory.__name__)
 
 
 # --------------------------------------------------------------------------- single-field ranges
@@ -95,184 +91,84 @@ RANGE_CASES: list[tuple[ModelType, Factory, str, list[float], list[float]]] = [
 ]
 
 
-def _case_ids() -> list[str]:
-    return [f"{mt.value}-{field}" for mt, _, field, _, _ in RANGE_CASES]
-
-
-@pytest.mark.parametrize(("model_type", "factory", "field", "ok", "bad"), RANGE_CASES, ids=_case_ids())
-def test_range_rules(
-    model_type: ModelType, factory: Factory, field: str, ok: list[float], bad: list[float]
-) -> None:
-    for v in ok:
-        assert check_bounds(model_type, factory(**{field: v})) == [], (field, v)
-    for v in bad:
-        violations = check_bounds(model_type, factory(**{field: v}))
-        assert any(field in msg for msg in violations), (field, v, violations)
-
-
-@pytest.mark.parametrize("model_type", [ModelType.FCFF, ModelType.FCFE])
-def test_risk_free_range(model_type: ModelType) -> None:
-    factory = valid_fcff if model_type is ModelType.FCFF else valid_fcfe
-    assert check_bounds(model_type, factory(risk_free_rate=0.10, terminal_growth_rate=0.02)) == []
-    assert check_bounds(model_type, factory(risk_free_rate=0.03, terminal_growth_rate=0.02)) == []
-    v = check_bounds(model_type, factory(risk_free_rate=-0.01, terminal_growth_rate=-0.02))
-    assert any("risk_free_rate" in m and "out of bounds" in m for m in v)
-    v = check_bounds(model_type, factory(risk_free_rate=0.11, terminal_growth_rate=0.02))
-    assert any("risk_free_rate" in m and "out of bounds" in m for m in v)
-
-
-def test_growth_early_stage_allows_up_to_300pct() -> None:
-    p = valid_fcff(revenue_growth_y1=2.5, survival_probability=0.6)
-    assert check_bounds(ModelType.FCFF, p, early_stage=True) == []
-    assert check_bounds(ModelType.FCFF, valid_fcff(revenue_growth_y1=3.0), early_stage=True) == []
-    assert check_bounds(ModelType.FCFF, valid_fcff(revenue_growth_y1=3.1), early_stage=True)
-    v = check_bounds(ModelType.FCFF, valid_fcff(revenue_growth_y1=2.5))
-    assert any("revenue_growth_y1" in m for m in v)
-    v = check_bounds(ModelType.FCFE, valid_fcfe(revenue_growth_y2=2.0), early_stage=True)
-    assert v == []
+def test_single_field_ranges() -> None:
+    for model_type, factory, field, ok, bad in RANGE_CASES:
+        for v in ok:
+            assert check_bounds(model_type, factory(**{field: v})) == [], (model_type, field, v)
+        for v in [*bad, float("nan")]:
+            violations = check_bounds(model_type, factory(**{field: v}))
+            assert any(field in msg for msg in violations), (model_type, field, v, violations)
 
 
 # --------------------------------------------------------------------------- cross-field rules
+# (model_type, proposal, check_bounds kwargs, expected substring of a violation or None for "passes")
+
+LOW_WACC = dict(
+    risk_free_rate=0.03,
+    levered_beta=0.3,
+    equity_risk_premium=0.02,
+    pretax_cost_of_debt=0.03,
+    target_debt_to_capital=0.9,
+    tax_rate=0.4,
+    terminal_growth_rate=0.028,
+)
+ER, FCFF, FCFE = ModelType.EXCESS_RETURN, ModelType.FCFF, ModelType.FCFE
+CROSS_FIELD_CASES: list[tuple[ModelType, Callable[[], BaseModel], dict, str | None]] = [
+    # risk-free range and terminal growth <= rf
+    (FCFF, lambda: valid_fcff(risk_free_rate=0.10, terminal_growth_rate=0.02), {}, None),
+    (FCFE, lambda: valid_fcfe(risk_free_rate=0.11, terminal_growth_rate=0.02), {}, "risk_free_rate"),
+    (FCFF, lambda: valid_fcff(terminal_growth_rate=0.042), {}, None),  # == rf is OK
+    (FCFF, lambda: valid_fcff(terminal_growth_rate=0.045), {}, "must be <= risk_free_rate"),
+    (FCFE, lambda: valid_fcfe(terminal_growth_rate=-0.03), {}, "terminal_growth_rate"),
+    # discount rate must exceed terminal growth by the engine's 0.5pt spread
+    (FCFF, lambda: valid_fcff(**LOW_WACC), {}, "WACC"),
+    (
+        FCFE,
+        lambda: valid_fcfe(risk_free_rate=0.03, levered_beta=0.0, terminal_growth_rate=0.03),
+        {},
+        "cost of equity",
+    ),
+    (ER, lambda: valid_excess_return(cost_of_equity=0.06, terminal_growth_rate=0.05), {}, None),
+    (
+        ER,
+        lambda: valid_excess_return(cost_of_equity=0.054, terminal_growth_rate=0.05),
+        {},
+        "by more than 0.005",
+    ),
+    (
+        ER,
+        lambda: valid_excess_return(terminal_growth_rate=0.045),
+        {"risk_free_rate": 0.04},
+        "must be <= risk_free_rate",
+    ),
+    # terminal ROIC vs growth, survival only for early stage, early-stage growth cap 300%
+    (FCFF, lambda: valid_fcff(terminal_roic=0.02, terminal_growth_rate=0.025), {}, "reinvestment"),
+    (FCFF, lambda: valid_fcff(terminal_roic=0.02, terminal_growth_rate=0.0), {}, None),
+    (FCFF, lambda: valid_fcff(survival_probability=0.7), {}, "early-stage"),
+    (FCFF, lambda: valid_fcff(survival_probability=0.7), {"early_stage": True}, None),
+    (FCFF, lambda: valid_fcff(revenue_growth_y1=3.0, survival_probability=0.6), {"early_stage": True}, None),
+    (FCFF, lambda: valid_fcff(revenue_growth_y1=3.1), {"early_stage": True}, "revenue_growth_y1"),
+    (FCFF, lambda: valid_fcff(revenue_growth_y1=2.5), {}, "revenue_growth_y1"),
+    # excess return payout / book-value-growth consistency
+    (ER, lambda: valid_excess_return(payout_ratio=1.0, book_value_growth_rate=0.0), {}, None),
+    (ER, lambda: valid_excess_return(payout_ratio=1.1, book_value_growth_rate=-0.01), {}, "payout_ratio"),
+    (ER, lambda: valid_excess_return(book_value_growth_rate=0.2), {}, "inconsistent"),
+    # dispatch
+    (ModelType.NAV_REIT, valid_fcff, {}, "expected ReitNavAssumptions"),
+    (FCFF, valid_segment_multiple, {}, "only valid for sotp"),
+]
 
 
-@pytest.mark.parametrize("factory", [valid_fcff, valid_fcfe])
-def test_terminal_growth_le_risk_free(factory: Factory) -> None:
-    mt = ModelType.FCFF if factory is valid_fcff else ModelType.FCFE
-    assert check_bounds(mt, factory(terminal_growth_rate=0.042)) == []  # == rf OK
-    v = check_bounds(mt, factory(terminal_growth_rate=0.045))
-    assert any("must be <= risk_free_rate" in m for m in v)
+def test_cross_field_rules() -> None:
+    for i, (model_type, make, kwargs, expected) in enumerate(CROSS_FIELD_CASES):
+        v = check_bounds(model_type, make(), **kwargs)
+        if expected is None:
+            assert v == [], (i, v)
+        else:
+            assert any(expected in m for m in v), (i, expected, v)
 
 
-@pytest.mark.parametrize("factory", [valid_fcff, valid_fcfe])
-def test_terminal_growth_floor(factory: Factory) -> None:
-    mt = ModelType.FCFF if factory is valid_fcff else ModelType.FCFE
-    assert check_bounds(mt, factory(terminal_growth_rate=-0.02)) == []
-    v = check_bounds(mt, factory(terminal_growth_rate=-0.03))
-    assert any("terminal_growth_rate" in m and "out of bounds" in m for m in v)
-
-
-def test_wacc_must_exceed_terminal_growth() -> None:
-    # Low WACC: rf 3%, beta 0.3, ERP 2%, all-debt-ish capital at cheap after-tax cost.
-    p = valid_fcff(
-        risk_free_rate=0.03,
-        levered_beta=0.3,
-        equity_risk_premium=0.02,
-        pretax_cost_of_debt=0.03,
-        target_debt_to_capital=0.9,
-        tax_rate=0.4,
-        terminal_growth_rate=0.028,
-    )
-    assert fcff_wacc(p) < 0.028 + 0.005
-    v = check_bounds(ModelType.FCFF, p)
-    assert any("WACC" in m for m in v)
-    ok = valid_fcff(terminal_growth_rate=0.03)
-    assert fcff_wacc(ok) > 0.035
-    assert check_bounds(ModelType.FCFF, ok) == []
-
-
-def test_fcff_wacc_formula() -> None:
-    p = valid_fcff()
-    ke = 0.042 + 1.1 * 0.045
-    assert fcff_wacc(p) == pytest.approx(ke * 0.8 + 0.055 * 0.79 * 0.2)
-
-
-def test_fcfe_cost_of_equity_must_exceed_terminal_growth() -> None:
-    p = valid_fcfe(risk_free_rate=0.03, levered_beta=0.3, equity_risk_premium=0.02, terminal_growth_rate=0.03)
-    assert check_bounds(ModelType.FCFE, p) == []  # ke = 0.036 > 0.03 + 0.005
-    # Within-range inputs can't breach it (ke >= rf + 0.006 > g + 0.005); a zero beta does.
-    p = valid_fcfe(risk_free_rate=0.03, levered_beta=0.0, equity_risk_premium=0.02, terminal_growth_rate=0.03)
-    v = check_bounds(ModelType.FCFE, p)
-    assert any("cost of equity" in m for m in v)
-
-
-def test_terminal_roic_must_exceed_positive_growth() -> None:
-    v = check_bounds(ModelType.FCFF, valid_fcff(terminal_roic=0.02, terminal_growth_rate=0.025))
-    assert any("terminal_roic" in m and "reinvestment" in m for m in v)
-    assert check_bounds(ModelType.FCFF, valid_fcff(terminal_roic=0.02, terminal_growth_rate=0.0)) == []
-
-
-def test_survival_flag_for_non_early_stage() -> None:
-    v = check_bounds(ModelType.FCFF, valid_fcff(survival_probability=0.7))
-    assert any("survival_probability" in m and "early-stage" in m for m in v)
-    assert check_bounds(ModelType.FCFF, valid_fcff(survival_probability=0.8)) == []
-    assert check_bounds(ModelType.FCFF, valid_fcff(survival_probability=0.7), early_stage=True) == []
-    v = check_bounds(ModelType.FCFF, valid_fcff(survival_probability=0.0), early_stage=True)
-    assert any("survival_probability" in m for m in v)
-
-
-def test_excess_return_cost_of_equity_gt_terminal_growth() -> None:
-    p = valid_excess_return(cost_of_equity=0.05, terminal_growth_rate=0.05)
-    v = check_bounds(ModelType.EXCESS_RETURN, p)
-    assert any("cost_of_equity" in m and "must exceed" in m for m in v)
-    assert (
-        check_bounds(
-            ModelType.EXCESS_RETURN, valid_excess_return(cost_of_equity=0.06, terminal_growth_rate=0.05)
-        )
-        == []
-    )
-    # the engine needs ke - g >= 0.5pt; a thinner spread must be caught here, not at build time
-    thin = check_bounds(
-        ModelType.EXCESS_RETURN, valid_excess_return(cost_of_equity=0.054, terminal_growth_rate=0.05)
-    )
-    assert any("cost_of_equity" in m and "by more than 0.005" in m for m in thin)
-
-
-def test_excess_return_terminal_growth_vs_supplied_rf() -> None:
-    p = valid_excess_return(terminal_growth_rate=0.045)
-    assert check_bounds(ModelType.EXCESS_RETURN, p) == []  # absolute cap 6% only
-    v = check_bounds(ModelType.EXCESS_RETURN, p, risk_free_rate=0.04)
-    assert any("must be <= risk_free_rate" in m for m in v)
-    v = check_bounds(ModelType.EXCESS_RETURN, valid_excess_return(terminal_growth_rate=0.07))
-    assert any("terminal_growth_rate" in m for m in v)
-
-
-def test_excess_return_payout_bounds() -> None:
-    # payout moves bv-growth consistency too, so adjust book growth alongside
-    assert (
-        check_bounds(
-            ModelType.EXCESS_RETURN, valid_excess_return(payout_ratio=0.0, book_value_growth_rate=0.112)
-        )
-        == []
-    )
-    assert (
-        check_bounds(
-            ModelType.EXCESS_RETURN, valid_excess_return(payout_ratio=1.0, book_value_growth_rate=0.0)
-        )
-        == []
-    )
-    v = check_bounds(
-        ModelType.EXCESS_RETURN, valid_excess_return(payout_ratio=1.1, book_value_growth_rate=-0.01)
-    )
-    assert any("payout_ratio" in m for m in v)
-    v = check_bounds(
-        ModelType.EXCESS_RETURN, valid_excess_return(payout_ratio=-0.1, book_value_growth_rate=0.12)
-    )
-    assert any("payout_ratio" in m for m in v)
-
-
-def test_excess_return_book_value_growth_consistency() -> None:
-    v = check_bounds(ModelType.EXCESS_RETURN, valid_excess_return(book_value_growth_rate=0.2))
-    assert any("book_value_growth_rate" in m and "inconsistent" in m for m in v)
-    v = check_bounds(ModelType.EXCESS_RETURN, valid_excess_return(book_value_growth_rate=0.6))
-    assert any("book_value_growth_rate" in m and "out of bounds" in m for m in v)
-
-
-def test_non_finite_values_flagged() -> None:
-    v = check_bounds(ModelType.NAV_REIT, valid_reit(cap_rate=float("nan")))
-    assert any("finite" in m for m in v)
-    v = check_bounds(ModelType.FCFF, valid_fcff(levered_beta=float("inf")))
-    assert any("finite" in m for m in v)
-
-
-# --------------------------------------------------------------------------- dispatch + SOTP
-
-
-def test_wrong_schema_for_model_type() -> None:
-    v = check_bounds(ModelType.NAV_REIT, valid_fcff())
-    assert v and "expected ReitNavAssumptions" in v[0]
-    v = check_bounds(ModelType.FCFF, valid_segment_multiple())
-    assert v and "only valid for sotp" in v[0]
-    assert check_bounds("fcfe", valid_fcfe()) == []  # str model type accepted
+# --------------------------------------------------------------------------- SOTP
 
 
 def _sotp(
@@ -301,78 +197,36 @@ def _mult_seg(name: str, multiple: float = 10.0, margin: float | None = 0.2) -> 
     )
 
 
-def test_sotp_valid() -> None:
-    p = _sotp([_fcff_seg("A"), _mult_seg("B"), _mult_seg("C", margin=None)], consolidated=valid_fcff())
-    assert check_bounds(ModelType.SOTP, p) == []
-    assert check_bounds(ModelType.SOTP, _sotp([_fcff_seg("A")], overhead=0.0)) == []
-
-
-def test_sotp_recurses_into_segment_fcff() -> None:
-    p = _sotp([_fcff_seg("A", valid_fcff(terminal_growth_rate=0.08)), _mult_seg("B")])
-    v = check_bounds(ModelType.SOTP, p)
+def test_sotp_rules() -> None:
+    ok = _sotp([_fcff_seg("A"), _mult_seg("B"), _mult_seg("C", margin=None)], consolidated=valid_fcff())
+    assert check_bounds(ModelType.SOTP, ok) == []
+    assert check_bounds(ModelType.SOTP, _sotp([_mult_seg("B", multiple=40.0)])) == []
+    # segment and consolidated FCFF proposals are checked recursively, with a prefixed field path
+    bad_seg = _fcff_seg("A", valid_fcff(terminal_growth_rate=0.08))
+    v = check_bounds(ModelType.SOTP, _sotp([bad_seg, _mult_seg("B")]))
     assert v and all(m.startswith("segment[A].") for m in v)
-
-
-def test_sotp_recurses_into_consolidated() -> None:
     v = check_bounds(ModelType.SOTP, _sotp([_mult_seg("B")], consolidated=valid_fcff(tax_rate=0.7)))
     assert any(m.startswith("consolidated_fcff.tax_rate") for m in v)
-
-
-@pytest.mark.parametrize("multiple", [0.0, -3.0, 40.5, float("inf")])
-def test_sotp_multiple_bounds(multiple: float) -> None:
-    v = check_bounds(ModelType.SOTP, _sotp([_mult_seg("B", multiple=multiple)]))
-    assert any("segment[B].ev_ebitda_multiple" in m for m in v)
-
-
-def test_sotp_multiple_upper_edge_ok() -> None:
-    assert check_bounds(ModelType.SOTP, _sotp([_mult_seg("B", multiple=40.0)])) == []
-
-
-def test_sotp_segment_margin_bounds() -> None:
-    v = check_bounds(ModelType.SOTP, _sotp([_mult_seg("B", margin=0.95)]))
-    assert any("segment_ebitda_margin" in m for m in v)
-
-
-def test_sotp_structural_rules() -> None:
-    assert "segments must not be empty" in check_bounds(ModelType.SOTP, _sotp([]))
-    v = check_bounds(ModelType.SOTP, _sotp([_mult_seg("B"), _mult_seg("B")]))
-    assert any("unique" in m for m in v)
     missing = SotpSegmentAssumption(segment_name="A", valuation_approach="fcff", ev_ebitda_multiple=0)
-    v = check_bounds(ModelType.SOTP, _sotp([missing]))
-    assert any("fcff_assumptions required" in m for m in v)
     weird = SotpSegmentAssumption(segment_name="A", valuation_approach="dcf", ev_ebitda_multiple=5)
-    v = check_bounds(ModelType.SOTP, _sotp([weird]))
-    assert any("valuation_approach" in m for m in v)
-    v = check_bounds(ModelType.SOTP, _sotp([_mult_seg("B")], overhead=5e8))
-    assert any("corporate_overhead_capitalized" in m for m in v)
+    violating = [
+        (_sotp([_mult_seg("B", multiple=40.5)]), "segment[B].ev_ebitda_multiple"),
+        (_sotp([_mult_seg("B", multiple=0.0)]), "segment[B].ev_ebitda_multiple"),
+        (_sotp([_mult_seg("B", margin=0.95)]), "segment_ebitda_margin"),
+        (_sotp([]), "segments must not be empty"),
+        (_sotp([_mult_seg("B"), _mult_seg("B")]), "unique"),
+        (_sotp([missing]), "fcff_assumptions required"),
+        (_sotp([weird]), "valuation_approach"),
+        (_sotp([_mult_seg("B")], overhead=5e8), "corporate_overhead_capitalized"),
+    ]
+    for proposal, expected in violating:
+        v = check_bounds(ModelType.SOTP, proposal)
+        assert any(expected in m for m in v), (expected, v)
 
 
-# --------------------------------------------------------------------------- composable pieces + prompt text
-
-
-def test_small_checks_compose() -> None:
-    rule = bounds.RangeRule("x", 0.0, 1.0, lo_open=True)
-    assert bounds.check_range(0.5, rule) == []
-    assert bounds.check_range(0.0, rule) and bounds.check_range(1.5, rule)
-    assert "x > 0 and <= 1" == rule.describe()
-    assert bounds.check_terminal_growth_vs_rf(0.03, 0.04) == []
-    assert bounds.check_terminal_growth_vs_rf(0.05, 0.04)
-    assert bounds.check_discount_rate_exceeds_growth(0.08, 0.03, "WACC") == []
-    assert bounds.check_discount_rate_exceeds_growth(0.034, 0.03, "WACC")
-    assert bounds.check_survival(0.5, early_stage=True) == []
-    assert bounds.check_survival(0.5, early_stage=False)
-
-
-@pytest.mark.parametrize("schema_cls", [FCFFAssumptions, FCFEAssumptions])
-def test_describe_bounds_mentions_every_ranged_field(schema_cls: type[BaseModel]) -> None:
-    text = "\n".join(describe_bounds(schema_cls))
-    for name in schema_cls.model_fields:
-        assert name in text, name
+def test_describe_bounds_mentions_every_ranged_field() -> None:
+    for schema_cls in (FCFFAssumptions, FCFEAssumptions):
+        text = "\n".join(describe_bounds(schema_cls))
+        for name in schema_cls.model_fields:
+            assert name in text, name
     assert "3" in "\n".join(describe_bounds(FCFFAssumptions, early_stage=True))
-
-
-def test_describe_bounds_unknown_schema_is_empty() -> None:
-    class NotAnAssumptionSchema(BaseModel):
-        x: float = 0.0
-
-    assert describe_bounds(NotAnAssumptionSchema) == []

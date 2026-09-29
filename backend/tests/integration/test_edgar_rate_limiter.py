@@ -1,9 +1,8 @@
-"""EDGAR rate limiter against a real Redis (TEST_REDIS_URL); skipped when unset."""
+"""EDGAR rate limiter against a real Redis (``redis_url``: TEST_REDIS_URL or a local redis-server)."""
 
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 import uuid
 
@@ -13,14 +12,11 @@ from app.data.edgar.client import EdgarRateLimiter
 
 pytestmark = pytest.mark.integration
 
-REDIS_URL = os.environ.get("TEST_REDIS_URL")
 
-
-@pytest.mark.skipif(not REDIS_URL, reason="TEST_REDIS_URL not set")
-async def test_real_redis_limits_concurrent_acquirers() -> None:
+async def test_real_redis_limits_concurrent_acquirers(redis_url: str) -> None:
     import redis.asyncio as redis_asyncio
 
-    client = redis_asyncio.from_url(REDIS_URL)
+    client = redis_asyncio.from_url(redis_url)
     key = f"edgar:test:{uuid.uuid4().hex}"
     try:
         # two "processes" (separate limiter objects) racing for the same 10/s budget

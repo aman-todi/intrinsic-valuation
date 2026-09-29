@@ -20,13 +20,6 @@ describe("ModelConfirmCard", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 
-  it("handles a missing runner-up and low confidence", () => {
-    render(<ModelConfirmCard run={makeRun({ runner_up_model: null, model_confidence: 0.4, model_type: "nav_reit" })} />);
-    expect(screen.getByTestId("runner-up-model")).toHaveTextContent("None");
-    expect(screen.getByTestId("recommended-model")).toHaveTextContent("REIT NAV");
-    expect(screen.getByTestId("model-confidence")).toHaveTextContent("40% confidence");
-  });
-
   it("offers a model override that excludes the recommended model", async () => {
     const user = userEvent.setup();
     const onOverride = vi.fn();

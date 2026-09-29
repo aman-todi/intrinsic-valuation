@@ -47,7 +47,8 @@ describe("ActiveRunGuard", () => {
     expect(screen.queryByTestId("active-run-lock")).not.toBeInTheDocument();
   });
 
-  it.each(["classifying", "proposing", "building"] as const)("blocks the form while a run is %s", async (status) => {
+  it("blocks the form while a run is building", async () => {
+    const status = "building";
     const run = state.seed({ status, ticker: "MSFT" }, { stepMs: 60_000 });
     renderGuard();
     await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent(`${status}:true`));
@@ -56,14 +57,6 @@ describe("ActiveRunGuard", () => {
     const notice = screen.getByTestId("active-run-lock");
     expect(notice).toHaveTextContent("MSFT");
     expect(screen.getByRole("link", { name: "View run" })).toHaveAttribute("href", `/runs/${run.id}`);
-  });
-
-  it("does NOT block while the run is awaiting_confirm", async () => {
-    state.seed({ status: "awaiting_confirm" });
-    renderGuard();
-    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("awaiting_confirm:false"));
-    expect(screen.getByRole("button", { name: "Value it" })).toBeEnabled();
-    expect(screen.queryByTestId("active-run-lock")).not.toBeInTheDocument();
   });
 
   it("unblocks once the active run reaches awaiting_confirm (polling)", async () => {

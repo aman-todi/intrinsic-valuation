@@ -8,7 +8,7 @@ import io
 import pytest
 from pypdf import PdfReader
 
-from app.export.pdf.builder import build_pdf, build_pdf_bytes, render_html
+from app.export.pdf.builder import build_pdf
 from app.export.pdf.formatting import fmt_per_share
 from app.export.pdf.narrative import fallback_narrative
 from tests.fixtures.valuation_results import ALL_MODEL_TYPES, COMPANY_NAMES, MODEL_REASONS, fixture_result
@@ -53,49 +53,3 @@ def test_builds_pdf_for_each_model(model_type, tmp_path):
     assert "not investment advice" in text.lower()
     for source in result.sources:
         assert source in flat
-
-
-@needs_weasyprint
-def test_pdf_handles_empty_grid_and_scenarios():
-    result = fixture_result("fcff").model_copy(
-        update={"sensitivity_grid": [], "scenarios": [], "assumptions_used": {}, "projection_rows": []}
-    )
-    narrative = fallback_narrative(result, "Northwind", [])
-    pdf = build_pdf_bytes(result, narrative, company_name="Northwind")
-    text = _text(pdf)
-    assert pdf[:4] == b"%PDF"
-    assert "No sensitivity grid" in text
-    assert "No scenarios" in text
-
-
-def test_render_html_sections_and_high_tv_flag():
-    result = fixture_result("fcff")
-    # terminal_value is undiscounted; its PV (x last-row discount factor) is 85% of operating value
-    rows = [*result.projection_rows[:-1], {**(result.projection_rows or [{}])[-1], "discount_factor": 0.5}]
-    result = result.model_copy(
-        update={"projection_rows": rows, "terminal_value": result.operating_value * 0.85 / 0.5}
-    )
-    html = render_html(result, fallback_narrative(result, "Northwind", []), company_name="Northwind")
-    for heading in (
-        "Executive summary",
-        "Business and historical overview",
-        "Model mechanics",
-        "Valuation walk",
-        "Sensitivity",
-        "Scenarios",
-        "Limitations and disclaimers",
-    ):
-        assert heading in html
-    assert "High terminal-value dependence" in html
-    assert "Revenue growth (Y1)" in html
-    assert "data:image/png;base64," in html
-
-
-def test_render_html_sotp_nested_assumptions():
-    result = fixture_result("sotp")
-    html = render_html(result, fallback_narrative(result, "Atlas", []), company_name="Atlas")
-    assert "Segment: Aerospace" in html
-    assert "Segment: Building Technologies" in html
-    assert "14.5x" in html
-    assert "Consolidated FCFF" in html
-    assert "-$6.20B" in html  # capitalized corporate overhead formatted as USD

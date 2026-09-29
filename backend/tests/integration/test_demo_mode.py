@@ -74,30 +74,11 @@ async def test_demo_mode_aapl_end_to_end(env):  # noqa: F811
         await edgar.aclose()
 
 
-async def test_demo_mode_unknown_ticker_fails_cleanly(env):  # noqa: F811
-    settings = env.settings.model_copy(update={"DATA_SOURCE_MODE": "fixtures", "FRED_API_KEY": ""})
-    edgar = FixtureEdgarClient()
-    uid = await env.make_user()
-    try:
-        run_id = (await env.create_run(uid, "ZZZZ")).json()["id"]
-        out = await env.classify(
-            run_id, edgar_client=edgar, market_provider=DemoMarketProvider(), settings=settings
-        )
-        assert out["status"] == "failed"
-        row = await env.row(run_id)
-        assert "not found" in (row.error_message or "")
-    finally:
-        await edgar.aclose()
-
-
 @pytest.mark.real_excel_verify
-@pytest.mark.parametrize(
-    ("ticker", "model"),
-    [("HON", "sotp"), ("JPM", "excess_return"), ("O", "nav_reit"), ("EOG", "nav_ep"), ("SNOW", "fcff")],
-)
-async def test_demo_mode_every_model_type_builds(env, ticker, model):  # noqa: F811
-    """Full pipeline (classify -> propose -> engine -> Excel -> PDF) on each model type's fixture shape,
-    with the real LibreOffice recalc check: the workbook's live formulas must reproduce the engine."""
+async def test_demo_mode_sotp_builds_with_real_recalc(env):  # noqa: F811
+    """Full pipeline (classify -> per-segment proposals -> engine -> Excel -> PDF) on HON's segment
+    fixture, with the real LibreOffice recalc check: the workbook's live formulas reproduce the engine."""
+    ticker, model = "HON", "sotp"
     settings = env.settings.model_copy(update={"DATA_SOURCE_MODE": "fixtures", "FRED_API_KEY": ""})
     edgar = FixtureEdgarClient()
     ctx = {

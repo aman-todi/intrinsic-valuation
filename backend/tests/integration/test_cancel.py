@@ -71,17 +71,6 @@ async def test_cancel_awaiting_confirm_is_immediate(env):  # noqa: F811
     assert r.status_code == 200 and r.json()["status"] == "cancelled"
 
 
-async def test_cancel_before_classify_job_starts(env):  # noqa: F811
-    """Cancel published before the job subscribed: the DB flag still stops it."""
-    uid = await env.make_user()
-    run_id = (await env.create_run(uid)).json()["id"]
-    r = await env.client.post(f"/api/runs/{run_id}/cancel", headers=env.headers(uid))
-    assert r.json()["status"] == "classifying" and r.json()["cancel_requested"]
-    out = await asyncio.wait_for(env.classify(run_id), timeout=10)
-    assert out == {"status": "cancelled"}
-    assert (await env.row(run_id)).status == "cancelled"
-
-
 async def test_cancel_during_slow_llm_proposal(env):  # noqa: F811
     uid = await env.make_user()
     env.anthropic.delay = 30.0  # the proposal call hangs

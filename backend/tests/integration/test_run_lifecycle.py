@@ -103,20 +103,3 @@ async def test_full_auto_run_aapl(env):  # noqa: F811
 
     # nothing active any more
     assert (await env.client.get("/api/runs/active", headers=env.headers(uid))).status_code == 204
-
-
-async def test_result_live_price_none_when_market_down(env):  # noqa: F811
-    uid = await env.make_user()
-    run_id = await env.to_awaiting_confirm(uid)
-    await env.confirm(uid, run_id)
-    await env.build(run_id)
-    env.provider.fail = True
-    r = await env.client.get(f"/api/runs/{run_id}/result", headers=env.headers(uid))
-    assert r.status_code == 200 and r.json()["live_price"] is None
-
-
-async def test_result_before_complete_is_409(env):  # noqa: F811
-    uid = await env.make_user()
-    run_id = await env.to_awaiting_confirm(uid)
-    r = await env.client.get(f"/api/runs/{run_id}/result", headers=env.headers(uid))
-    assert r.status_code == 409

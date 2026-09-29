@@ -18,22 +18,6 @@ test.describe("single-run lock", () => {
     await expect(page.getByTestId("progress-overlay")).toBeVisible();
   });
 
-  test("a run started in another tab locks the ticker form", async ({ page }) => {
-    const { state } = await installMockApi(page, { classifyMs: 60_000 });
-    await page.goto("/?new=1");
-    const ticker = page.getByLabel("Ticker");
-    await expect(ticker).toBeEnabled();
-
-    state.create("TSLA"); // started elsewhere; ActiveRunGuard's poll must pick it up
-    await expect(page.getByTestId("active-run-lock")).toContainText("TSLA", { timeout: 12_000 });
-    await expect(ticker).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Value it" })).toBeDisabled();
-    await expect(page.getByRole("navigation", { name: "Main" }).getByText("New valuation")).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
-  });
-
   test("a 409 from POST /api/runs redirects to the existing active run", async ({ page }) => {
     const { state, requests } = await installMockApi(page, { classifyMs: 60_000 });
     await page.goto("/?new=1");

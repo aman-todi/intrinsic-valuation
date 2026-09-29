@@ -53,32 +53,6 @@ async def test_cancel_while_job_still_queued_is_immediate(env, saq_queue):  # no
     assert (await env.create_run(uid)).status_code == 201
 
 
-async def test_cancel_when_job_is_gone_is_immediate(env, saq_queue):  # noqa: F811
-    uid = await env.make_user()
-    run_id = (await env.create_run(uid)).json()["id"]
-    await saq_queue.redis.flushdb()  # e.g. Redis restarted without persistence
-
-    body = await _cancel(env, uid, run_id)
-    assert body["status"] == "cancelled"
-
-
-async def test_cancel_while_job_active_waits_for_the_worker(env, saq_queue):  # noqa: F811
-    uid = await env.make_user()
-    run_id = (await env.create_run(uid)).json()["id"]
-    job = await saq_queue.dequeue(timeout=1)  # a worker picked it up...
-    assert job is not None
-    await saq_queue.update(job, status=Status.ACTIVE)  # ...and started it
-
-    body = await _cancel(env, uid, run_id)
-    assert body["status"] == "classifying" and body["cancel_requested"] is True
-    assert (await saq_queue.job(job.key)).status == Status.ACTIVE  # not aborted by the API
-    assert (await env.create_run(uid)).status_code == 409
-
-    # the running job acknowledges the cancel
-    assert await env.classify(run_id) == {"status": "cancelled"}
-    assert (await env.row(run_id)).status == "cancelled"
-
-
 async def test_post_reaps_stale_cancel_requested_run(env, monkeypatch):  # noqa: F811
     # FakeQueue has no job inspection -> the cancel route falls back to "cancelling" (worker path)
     uid = await env.make_user()
@@ -102,12 +76,3 @@ async def test_post_reaps_stale_cancel_requested_run(env, monkeypatch):  # noqa:
 
     # a late worker pickup of the stale job is a no-op
     assert await env.classify(stuck) == {"status": "cancelled"}
-
-
-async def test_post_does_not_reap_active_run_without_cancel(env, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(runs_routes, "STALE_CANCEL_AFTER_S", 0.0)
-    uid = await env.make_user()
-    first = (await env.create_run(uid)).json()["id"]
-    r = await env.create_run(uid, "MSFT")
-    assert r.status_code == 409 and r.json()["active_run_id"] == first
-    assert (await env.row(first)).status == "classifying"

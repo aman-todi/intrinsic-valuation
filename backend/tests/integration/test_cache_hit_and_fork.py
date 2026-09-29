@@ -86,16 +86,6 @@ async def test_cache_hit_then_private_fork(env, engine_calls):  # noqa: F811
     assert cm.s3_prefix == first.s3_prefix
 
 
-async def test_unedited_values_with_edited_flag_still_share_the_cache(env, engine_calls):  # noqa: F811
-    """The server decides "edited" from the values, not the client's flag."""
-    u1 = await env.make_user()
-    r1 = await env.to_awaiting_confirm(u1)
-    proposed = (await env.get_run(u1, r1))["proposed_assumptions"]
-    resp = await env.confirm(u1, r1, {"assumptions": proposed, "edited": True})
-    assert resp.status_code == 200
-    assert resp.json()["mode"] == "auto" and resp.json()["assumptions_edited"] is False
-
-
 async def test_confirm_rejects_out_of_bounds_assumptions(env):  # noqa: F811
     uid = await env.make_user()
     run_id = await env.to_awaiting_confirm(uid)

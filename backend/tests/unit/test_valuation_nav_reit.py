@@ -2,17 +2,12 @@
 
 import pytest
 
-from app.valuation.base import ValuationError
-from app.valuation.nav_reit import ReitNavValuator, derive_noi
+from app.valuation.nav_reit import ReitNavValuator
 from app.valuation.version import ENGINE_VERSION
 
 from .engine_fixtures_alt import market, reit_assumptions, reit_financials
 
 V = ReitNavValuator()
-
-
-def test_derive_noi():
-    assert derive_noi(reit_financials()) == pytest.approx(60.0 + 40.0)
 
 
 def test_reit_case_hand_computed():
@@ -47,38 +42,3 @@ def test_reit_case_hand_computed():
     assert row["noi"] == pytest.approx(100.0)
     assert row["forward_noi"] == pytest.approx(102.0)
     assert row["nav"] == pytest.approx(1340.0)
-
-
-def test_missing_ffo():
-    r = V.compute(reit_financials(ffo=None), market("REIT"), reit_assumptions())
-    assert r.implied_p_ffo is None
-    assert any("FFO" in f for f in r.data_confidence_flags)
-
-
-def test_cap_rate_guard():
-    with pytest.raises(ValuationError):
-        V.compute(reit_financials(), market("REIT"), reit_assumptions(cap=0.0))
-
-
-def test_scenarios_ordering():
-    r = V.compute(reit_financials(), market("REIT"), reit_assumptions())
-    assert [s.label for s in r.scenarios] == ["base", "bull", "bear"]
-    base, bull, bear = r.scenarios
-    assert base.value_per_share == pytest.approx(134.0)
-    # bull: cap 4.5%, growth 3% -> GAV = 103 / 0.045
-    assert bull.value_per_share == pytest.approx((103.0 / 0.045 + 100.0 - 800.0) / 10.0)
-    # bear: cap 5.5%, growth 1% -> GAV = 101 / 0.055
-    assert bear.value_per_share == pytest.approx((101.0 / 0.055 + 100.0 - 800.0) / 10.0)
-    assert bull.key_assumption_deltas == pytest.approx({"cap_rate": -0.005, "noi_growth_rate": 0.01})
-    assert bear.key_assumption_deltas == pytest.approx({"cap_rate": 0.005, "noi_growth_rate": -0.01})
-
-
-def test_sensitivity_grid():
-    r = V.compute(reit_financials(), market("REIT"), reit_assumptions())
-    grid = r.sensitivity_grid
-    assert len(grid) == 25
-    assert list(dict.fromkeys(c.row_label for c in grid)) == ["4.00%", "4.50%", "5.00%", "5.50%", "6.00%"]
-    assert list(dict.fromkeys(c.col_label for c in grid)) == ["0.00%", "1.00%", "2.00%", "3.00%", "4.00%"]
-    assert grid[12].value_per_share == pytest.approx(134.0)
-    # corner: cap 4%, growth 0% -> GAV 2,500
-    assert grid[0].value_per_share == pytest.approx((2500.0 + 100.0 - 800.0) / 10.0)

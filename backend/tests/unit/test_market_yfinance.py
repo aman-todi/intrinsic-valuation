@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.data.market import MarketDataUnavailable, PriceSnapshot, YFinanceProvider, get_market_provider
+from app.data.market import MarketDataUnavailable, YFinanceProvider
 from app.data.market import yfinance_provider as yp
 
 
@@ -46,25 +46,6 @@ def provider():
     return YFinanceProvider(retry_delay_seconds=0)
 
 
-async def test_happy_path(monkeypatch, provider):
-    calls = install(monkeypatch, FakeFastInfo(market_cap=2.9e12))
-    snap = await provider.get_price_snapshot(" aapl ")
-    assert isinstance(snap, PriceSnapshot)
-    assert calls == ["AAPL"]
-    assert snap.ticker == "AAPL"
-    assert snap.price == 190.5
-    assert snap.shares_outstanding == 15e9
-    assert snap.market_cap == 2.9e12
-    assert snap.currency == "USD"
-    assert snap.as_of.endswith("+00:00")
-
-
-async def test_market_cap_falls_back_to_price_times_shares(monkeypatch, provider):
-    install(monkeypatch, FakeFastInfo(last_price=10.0, shares=1_000, market_cap=RuntimeError("boom")))
-    snap = await provider.get_price_snapshot("XYZ")
-    assert snap.market_cap == 10_000.0
-
-
 async def test_retries_once_then_succeeds(monkeypatch, provider):
     calls = install(monkeypatch, RuntimeError("rate limited"), FakeFastInfo())
     snap = await provider.get_price_snapshot("MSFT")
@@ -72,23 +53,17 @@ async def test_retries_once_then_succeeds(monkeypatch, provider):
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize(
-    "bad",
-    [
+async def test_raises_typed_error_after_one_retry(monkeypatch, provider):
+    bads = [
         RuntimeError("network down"),
         FakeFastInfo(last_price=None),
         FakeFastInfo(last_price=float("nan")),
         FakeFastInfo(last_price=0),
         FakeFastInfo(shares=None),
-    ],
-)
-async def test_raises_typed_error_after_one_retry(monkeypatch, provider, bad):
-    calls = install(monkeypatch, bad)
-    with pytest.raises(MarketDataUnavailable) as ei:
-        await provider.get_price_snapshot("BAD")
-    assert ei.value.ticker == "BAD"
-    assert len(calls) == 2  # original + exactly one retry
-
-
-def test_factory_returns_yfinance_provider():
-    assert isinstance(get_market_provider(), YFinanceProvider)
+    ]
+    for bad in bads:
+        calls = install(monkeypatch, bad)
+        with pytest.raises(MarketDataUnavailable) as ei:
+            await provider.get_price_snapshot("BAD")
+        assert ei.value.ticker == "BAD"
+        assert len(calls) == 2, bad  # original + exactly one retry

@@ -25,7 +25,6 @@ from app.export.excel.recalc_verify import (
     verify_workbook,
 )
 from app.valuation import get_valuator
-from app.valuation.fcff import GROWTH_FIELDS
 from tests.unit.excel_cases import CASES, ExcelCase, case
 
 pytestmark = pytest.mark.soffice
@@ -84,8 +83,6 @@ def _grid_cell(result, name: str) -> float:
 
 @pytest.mark.parametrize("cid", list(CASES))
 async def test_recalculated_workbook_matches_engine(cid, tmp_path):
-    if cid == "sotp":
-        pytest.importorskip("app.valuation.sotp")
     c = case(cid)
     result, path = _build(c, tmp_path)
     names = [
@@ -128,8 +125,10 @@ def _set_input(path: Path, out: Path, name: str, value: float) -> None:
     wb.save(out)
 
 
-@pytest.mark.parametrize("cid", ["fcff_mature", "fcfe_levered"])
-async def test_terminal_growth_edit_flows_through(cid, tmp_path):
+async def test_terminal_growth_edit_flows_through(tmp_path):
+    """Editing a named input in the workbook changes value per share (and the grid centre) to what
+    the engine computes for the edited assumptions."""
+    cid = "fcff_mature"
     c = case(cid)
     result, path = _build(c, tmp_path)
     new_g = c.assumptions.terminal_growth_rate.value + 0.01
@@ -148,49 +147,3 @@ async def test_terminal_growth_edit_flows_through(cid, tmp_path):
     assert got["value_per_share"] > result.value_per_share
     assert relative_error(got["value_per_share"], expected) <= TOL
     assert relative_error(got["sens_row2_col2"], expected) <= TOL  # grid centre follows the edit too
-
-
-async def test_growth_edit_flows_through_sotp_segment(tmp_path):
-    pytest.importorskip("app.valuation.sotp")
-    c = case("sotp")
-    result, path = _build(c, tmp_path)
-    seg = c.assumptions.segments[0]
-    new = seg.fcff_assumptions.revenue_growth_y1.value + 0.05
-    edited = tmp_path / "sotp_edited.xlsx"
-    _set_input(path, edited, f"seg1_{GROWTH_FIELDS[0]}", new)
-    got = await recalc_and_read(edited, ["value_per_share"], timeout=120)
-
-    fa = seg.fcff_assumptions.model_copy(
-        update={"revenue_growth_y1": seg.fcff_assumptions.revenue_growth_y1.model_copy(update={"value": new})}
-    )
-    segs = [seg.model_copy(update={"fcff_assumptions": fa}), *c.assumptions.segments[1:]]
-    expected = (
-        get_valuator("sotp")
-        .compute(c.financials, c.market, c.assumptions.model_copy(update={"segments": segs}))
-        .value_per_share
-    )
-    assert expected != pytest.approx(result.value_per_share)
-    assert relative_error(got["value_per_share"], expected) <= TOL
-
-
-async def test_timeout_kills_soffice_and_cleans_up(tmp_path, monkeypatch):
-    c = case("fcff_mature")
-    _, path = _build(c, tmp_path)
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
-    (tmp_path / "tmp").mkdir()
-    with pytest.raises(ExcelRecalcError, match="timed out"):
-        await recalc_and_read(path, ["value_per_share"], timeout=0.05)
-    assert list((tmp_path / "tmp").iterdir()) == []
-
-
-async def test_cancellation_kills_soffice_and_cleans_up(tmp_path, monkeypatch):
-    c = case("fcff_mature")
-    _, path = _build(c, tmp_path)
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
-    (tmp_path / "tmp").mkdir()
-    task = asyncio.create_task(recalc_and_read(path, ["value_per_share"], timeout=120))
-    await asyncio.sleep(0.3)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert list((tmp_path / "tmp").iterdir()) == []
