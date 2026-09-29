@@ -28,7 +28,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
   }
 }
 
-# models/ and runs/ are regenerable caches (SPEC §11.4). edgar-raw/ and damodaran/ are kept.
+# models/ and runs/ are regenerable caches (SPEC §11.5). edgar-raw/ and damodaran/ are kept.
 # deploy/ holds the per-commit bundles (compose file, Caddyfile, deploy script) the instance pulls.
 resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
   bucket = aws_s3_bucket.artifacts.id

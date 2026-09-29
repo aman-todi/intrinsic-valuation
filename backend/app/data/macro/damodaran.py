@@ -1,4 +1,4 @@
-"""Damodaran industry & ERP datasets (spec §5.4, §11.4, §14.6).
+"""Damodaran industry & ERP datasets (spec §5.4, §11.5, §14.6).
 
 Datasets (from ``pages.stern.nyu.edu/~adamodar/pc/datasets/``):
 

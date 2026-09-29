@@ -1,4 +1,4 @@
-"""S3 raw-JSON cache helper (spec §5.1, §11.4).
+"""S3 raw-JSON cache helper (spec §5.1, §11.5).
 
 Keys used by the EDGAR client: `edgar-raw/{cik}/{fetched_at_iso}.json`. Objects are stored
 gzip-compressed (`ContentEncoding: gzip`); `get_json` transparently decompresses. All boto3 calls run in

@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     CORS_ORIGINS: str = "http://localhost:3000"
 
-    # Artifact storage (§11.4). "s3" in every deployed environment; "local" is for dev without AWS:
+    # Artifact storage (§11.5). "s3" in every deployed environment; "local" is for dev without AWS:
     # files live under LOCAL_STORAGE_DIR and download links are short-lived HMAC-signed URLs served
     # by the API's GET /api/files/{path} route (PUBLIC_API_BASE_URL is the browser-facing API origin).
     STORAGE_BACKEND: Literal["s3", "local"] = "s3"

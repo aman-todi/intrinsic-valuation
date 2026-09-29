@@ -1,4 +1,4 @@
-"""Artifact storage (spec §8.3, §11.4).
+"""Artifact storage (spec §8.3, §11.5).
 
 Layout (same keys for both backends)::
 

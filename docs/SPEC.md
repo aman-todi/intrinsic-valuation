@@ -32,7 +32,7 @@ Given a US-listed ticker, the app determines the *right* valuation model for tha
    - **Damodaran datasets** (static `.xls`/`.xlsx` files, no key) — industry betas, ERP, margin/growth benchmarks. Refreshed manually a few times a year, cached in S3.
    - **No paid market-data API, no cross-check provider, no analyst consensus** — explicitly deferred.
 9. **AI's job is proposing assumptions + writing narrative text — never arithmetic.** The valuation engine is pure, deterministic, unit-tested Python. Claude structured outputs (Pydantic schema, all-required flat fields — see §5.3 for why) return assumption values + one-line rationale + source per field.
-10. **Stack:** FastAPI (Python 3.13) + SAQ/Redis job queue + Postgres via Supabase (session pooler) + S3 (already on free tier) + Next.js 16 frontend, all on **AWS ECS Fargate**. No LangGraph — the pipeline is a plain state machine; a bounded propose→validate→repair loop handles the one place (assumption proposal) that benefits from an agentic pattern, using the Anthropic SDK directly.
+10. **Stack:** FastAPI (Python 3.13) + SAQ/Redis job queue + Postgres via Supabase (session pooler) + S3 (already on free tier) + Next.js 16 frontend on **Vercel**. The backend (API, worker, Redis, Caddy for TLS) runs as a **docker compose stack on a single EC2 instance**, provisioned with **Terraform** — sized for tens of users, not horizontal scale. No LangGraph — the pipeline is a plain state machine; a bounded propose→validate→repair loop handles the one place (assumption proposal) that benefits from an agentic pattern, using the Anthropic SDK directly.
 
 Everything below implements this. Section 12 breaks the build into 15 tickets designed to run in parallel.
 ## 1. Tech stack & pinned versions
@@ -72,8 +72,11 @@ Researched against current state as of **September 2026**. Pin exactly; do not f
 | Auth | Supabase Auth | — | **New JWT signing keys (asymmetric, JWKS)**, not the legacy shared `JWT_SECRET`. Verify locally via cached JWKS — no per-request round trip to Supabase. |
 | DB hosting | Supabase Postgres | — | Session pooler (port 5432 via pooler host) for the app; direct connection for Alembic. |
 | Object storage | AWS S3 | — | Already on your free tier. |
-| Container hosting | AWS ECS on **Fargate** | — | Two services: `api` (behind ALB) and `worker` (no ingress). See §11 and the AWS runbook for free-tier/credit caveats — Fargate/ALB/NAT are **not** covered by the post-July-2025 Free Plan; budget accordingly. |
-| Container registry | Amazon ECR | — | |
+| Backend hosting | **One AWS EC2 instance** (Graviton `t4g.small`, arm64, Amazon Linux 2023) running **docker compose** | Compose v2 plugin | Services: `caddy`, `api`, `worker`, `redis`. See §11. |
+| Reverse proxy / TLS | **Caddy** | **2.11** | Automatic Let's Encrypt certificates; SSE-safe proxying. |
+| Infrastructure as code | **Terraform** | **>=1.10** (S3 backend with native lockfile), AWS provider `~> 6.0` | Everything in AWS is declared under `infra/terraform/`. |
+| Container registry | Amazon ECR | — | `dcf-api`, `dcf-worker` (arm64 images). |
+| Frontend hosting | **Vercel** | — | Git-integrated deploys from `frontend/`. |
 | CI | GitHub Actions | — | |
 
 ### Explicitly excluded (per decisions)
@@ -90,17 +93,22 @@ dcf-app/
 │   ├── ci-frontend.yml
 │   └── deploy.yml
 ├── infra/
-│   ├── ecs/
-│   │   ├── task-def-api.json
-│   │   ├── task-def-worker.json
-│   │   └── task-def-redis.json          # only if self-hosting Redis on ECS instead of ElastiCache
+│   ├── terraform/                         # all AWS resources (see §11.3)
+│   │   ├── bootstrap/                     # one-off: S3 state bucket
+│   │   ├── versions.tf  variables.tf  outputs.tf  terraform.tfvars.example  backend.hcl.example
+│   │   ├── network.tf  compute.tf  storage.tf  iam.tf  ssm.tf  budget.tf  main.tf
+│   │   └── templates/user_data.sh.tftpl   # first-boot host setup (docker, compose, swap, /opt/dcf)
+│   ├── deploy/
+│   │   ├── docker-compose.prod.yml        # production stack on the EC2 host
+│   │   └── Caddyfile
 │   ├── docker/
 │   │   ├── Dockerfile.api
 │   │   ├── Dockerfile.worker
-│   │   └── Dockerfile.frontend
+│   │   └── Dockerfile.frontend            # local docker compose only (production frontend is on Vercel)
 │   └── scripts/
-│       ├── bootstrap_aws.sh              # creates ECR repos, S3 bucket, log groups
-│       ├── deploy.sh                      # build, push, register task def, update service
+│       ├── put_ssm_params.sh              # .env -> SSM Parameter Store (secrets never enter Terraform state)
+│       ├── deploy.sh                      # build/push images, ship deploy bundle, run remote deploy via SSM
+│       ├── deploy_remote.sh               # runs on the host: render .env, migrate, compose up, health-check
 │       └── seed_damodaran_cache.py        # one-off: pull Damodaran xls files into S3
 ├── docker-compose.yml                     # local dev: postgres(optional), redis, api, worker, frontend
 ├── backend/
@@ -1218,7 +1226,7 @@ Because the pipeline's work is almost entirely `await`-ing I/O (EDGAR, yfinance,
 
 On cancel: write any partial S3 outputs to a run-scoped temp prefix (`runs/{run_id}/_tmp/`) and only copy them to their final `runs/{run_id}/` or `models/{ticker}/{model}/{accession}/` location at the very end of a successful build; on cancellation or failure, delete the temp prefix. This guarantees a cancelled or failed run never contaminates the shared cache.
 
-Also handle **ECS deploy-time SIGTERM** for the worker service: ECS sends `SIGTERM` then `SIGKILL` after `stopTimeout` (max 120s on Fargate). Install a signal handler that sets a "draining" flag causing the worker to stop pulling new jobs and, if a job is in flight, treat it exactly like a user cancel (same partial-output cleanup) if it can't finish within the remaining time budget.
+Also handle **deploy-time SIGTERM** for the worker: `docker compose` sends `SIGTERM`, then `SIGKILL` after the service's `stop_grace_period` (90s for the worker; SAQ's own shutdown grace is 60s so cleanup finishes first). Install a signal handler that sets a "draining" flag causing the worker to stop pulling new jobs and, if a job is in flight, treat it exactly like a user cancel (same partial-output cleanup) if it can't finish within the remaining time budget.
 
 ### 8.4 Single-flight build lock (concurrent identical requests)
 
@@ -1264,7 +1272,7 @@ async def stream_events(run_id: str, user=Depends(current_user), db=Depends(get_
             if run.status in ("complete", "failed", "cancelled"):
                 yield f"event: done\ndata: {run.status}\n\n"
                 return
-            yield ": heartbeat\n\n"   # keeps the ALB's 60s idle timeout from closing the connection
+            yield ": heartbeat\n\n"   # keeps idle proxies/clients from closing the connection
             await asyncio.sleep(1.5)
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 ```
@@ -1282,7 +1290,7 @@ Reconnect-safe: the frontend passes `Last-Event-ID` or simply re-requests from `
 | `POST /api/runs/{id}/cancel` | Sets `cancel_requested`, publishes the Redis cancel signal (§8.3). |
 | `GET /api/runs/{id}/events` | SSE stream (§8.6). |
 | `GET /api/runs/{id}/result` | Once `COMPLETE`: the `ValuationResult` JSON + presigned S3 URLs for the `.xlsx` and `.pdf`, plus a **fresh** live price fetched at read time (not the cached one) so the UI can show current upside next to the cached fair value (§ pricing decision). |
-| `GET /api/health` | Liveness/readiness for the ALB target group and ECS health check. No auth. |
+| `GET /api/health` | Liveness/readiness for the compose healthcheck and deploy verification. No auth. |
 
 ### 9.2 Database connectivity (Supabase)
 
@@ -1407,109 +1415,74 @@ No per-model-type form component is ever written by hand — new model types (sh
 ### 10.4 Sensitivity chart
 
 Recharts doesn't have a first-class heatmap; render the 5×5 `sensitivity_grid` as a `<table>` with cell background color interpolated by `value_per_share` relative to the base case (simple CSS, no chart library needed) plus a `ScatterChart`/`BarChart` for the scenario comparison. Keep this simple — it's a small internal tool for ~10 users, not a polished public product.
-## 11. Deployment: Docker, ECS, S3
+## 11. Deployment: Docker, EC2, Terraform, Vercel
+
+Target scale is tens of users (≤ 50), so production is deliberately one small host:
+
+```
+browser ──HTTPS──> Vercel (Next.js frontend)
+   │
+   └──HTTPS (CORS)──> EC2 t4g.small, Elastic IP
+                       └─ docker compose: caddy :80/:443 ──> api:8000 (uvicorn)
+                                                              worker (SAQ) ──> redis:6379 <── api
+                          api/worker ──> Supabase Postgres (session pooler) · S3 · ECR (pull)
+                                     ──> SEC EDGAR · Yahoo · FRED · Anthropic (egress)
+```
 
 ### 11.1 Dockerfiles
 
-**`infra/docker/Dockerfile.api`** (slim — no LibreOffice/WeasyPrint needed; the API only reads/writes DB and S3 and serves the REST/SSE surface):
+All images build for **`linux/arm64`** (Graviton).
 
-```dockerfile
-FROM python:3.13-slim AS base
-WORKDIR /app
-ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
-RUN apt-get update && apt-get install -y --no-install-recommends libpq5 curl && rm -rf /var/lib/apt/lists/*
-COPY backend/pyproject.toml backend/uv.lock* ./
-RUN pip install --break-system-packages uv && uv pip install --system -e .
-COPY backend/app ./app
-COPY backend/alembic.ini backend/alembic ./
-EXPOSE 8000
-HEALTHCHECK --interval=15s --timeout=3s CMD curl -f http://localhost:8000/api/health || exit 1
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
-```
+- **`infra/docker/Dockerfile.api`** — `python:3.13-slim`, the backend package, `alembic.ini` + `alembic/` (the deploy runs migrations from this image), `uvicorn app.main:app --workers 2`, `HEALTHCHECK` on `/api/health`. No LibreOffice/WeasyPrint.
+- **`infra/docker/Dockerfile.worker`** — `python:3.13-slim` plus `libreoffice-calc`/`libreoffice-core` (Excel recalc verification) and the WeasyPrint system libraries (`libpango-1.0-0 libpangoft2-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libharfbuzz-subset0 fonts-liberation fonts-dejavu-core shared-mime-info`). `CMD ["saq", "app.jobs.worker_settings.settings", "-v"]`.
+- **`infra/docker/Dockerfile.frontend`** — Next.js `output: "standalone"` build (`node:24-slim`), used only by the local `docker-compose.yml`; production frontend builds happen on Vercel.
 
-**`infra/docker/Dockerfile.worker`** (heavier — LibreOffice for Excel recalc verification, Pango/Cairo for WeasyPrint):
+### 11.2 docker-compose
 
-```dockerfile
-FROM python:3.13-slim AS base
-WORKDIR /app
-ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 curl \
-    libreoffice-calc libreoffice-core --no-install-recommends \
-    libpango-1.0-0 libpangoft2-1.0-0 libpangocairo-1.0-0 \
-    libcairo2 libgdk-pixbuf2.0-0 libharfbuzz-subset0 \
-    fonts-liberation fonts-dejavu-core shared-mime-info \
-  && rm -rf /var/lib/apt/lists/*
-COPY backend/pyproject.toml backend/uv.lock* ./
-RUN pip install --break-system-packages uv && uv pip install --system -e .
-COPY backend/app ./app
-CMD ["python", "-m", "saq", "app.jobs.worker_settings.WorkerSettings"]
-```
+**Local dev (`docker-compose.yml`)**: `redis`, `api`, `worker`, `frontend`, reading `.env`. Postgres is either the dev Supabase project or a local Postgres 16. Offline demo mode (`DATA_SOURCE_MODE=fixtures`, `STORAGE_BACKEND=local`, `DEV_AUTH_BYPASS=true`) runs the full flow with no external services.
 
-**`infra/docker/Dockerfile.frontend`**:
+**Production (`infra/deploy/docker-compose.prod.yml`)** on the EC2 host, project name `dcf`, all services `restart: unless-stopped` with json-file log rotation (10 MB × 5):
 
-```dockerfile
-FROM node:24-slim AS build
-WORKDIR /app
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
-COPY frontend ./
-RUN npm run build
+| Service | Image | Notes |
+|---|---|---|
+| `caddy` | `caddy:2.11-alpine` | Publishes 80/443 (+443/udp). Serves `APP_DOMAIN` with automatic HTTPS and reverse-proxies everything to `api:8000` with `flush_interval -1` (live SSE) and no response compression. No access log (the SSE URL carries `?access_token=`). Certificates persist in the `caddy_data` volume. |
+| `api` | `<ECR>/dcf-api:<git-sha>` | Not published; healthcheck on `/api/health`; `stop_grace_period: 30s`. |
+| `worker` | `<ECR>/dcf-worker:<git-sha>` | `init: true` (reaps LibreOffice children); `stop_grace_period: 90s`; `WORKER_SHUTDOWN_GRACE_SECONDS=60`; `WORKER_CONCURRENCY=2` on `t4g.small`. |
+| `redis` | `redis:7-alpine` | No persistence (`--save "" --appendonly no`), 128 MB, `noeviction`. Queue, locks, rate limiter and cancel pub/sub only — Postgres and S3 are the sources of truth. |
 
-FROM node:24-slim AS run
-WORKDIR /app
-ENV NODE_ENV=production
-COPY --from=build /app/.next/standalone ./
-COPY --from=build /app/.next/static ./.next/static
-COPY --from=build /app/public ./public
-EXPOSE 3000
-CMD ["node", "server.js"]
-```
-(Requires `output: "standalone"` in `next.config.ts`.) The frontend can equally be deployed on Vercel instead of ECS if that's simpler operationally — ECS is specified here because the user asked to evaluate it, but ticket 15 should note this as a one-line decision point, not a hard requirement, since the frontend has no server-side secrets beyond the Supabase anon key (safe to ship client-side) and API base URL.
+The compose file pins values that must never differ in production regardless of `.env`: `STORAGE_BACKEND=s3`, `DATA_SOURCE_MODE=live`, `DEV_AUTH_BYPASS=false`, `REDIS_URL=redis://redis:6379`.
 
-### 11.2 docker-compose (local dev)
+### 11.3 AWS resources (Terraform, `infra/terraform/`)
 
-```yaml
-# docker-compose.yml
-services:
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
-  api:
-    build: { context: ., dockerfile: infra/docker/Dockerfile.api }
-    env_file: .env
-    environment:
-      - REDIS_URL=redis://redis:6379
-    ports: ["8000:8000"]
-    depends_on: [redis]
-  worker:
-    build: { context: ., dockerfile: infra/docker/Dockerfile.worker }
-    env_file: .env
-    environment:
-      - REDIS_URL=redis://redis:6379
-    depends_on: [redis]
-  frontend:
-    build: { context: ., dockerfile: infra/docker/Dockerfile.frontend }
-    environment:
-      - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-    ports: ["3000:3000"]
-    depends_on: [api]
-```
-Local dev points `DATABASE_URL`/`DATABASE_POOLER_URL` at the real (free-tier) Supabase project — there is no local Postgres container, since Supabase's local CLI stack is an extra moving part this project doesn't need for a ~10-user app. `.env` (git-ignored, based on `.env.example`) holds real dev-project values.
+State lives in an S3 bucket created once by `infra/terraform/bootstrap/` (versioned, encrypted, TLS-only); the main configuration uses the S3 backend with `use_lockfile = true`.
 
-### 11.3 ECS Fargate
+- **Compute**: one EC2 instance, Amazon Linux 2023 arm64 (AMI from the public SSM parameter), `instance_type` variable (default `t4g.small`; `t4g.medium` when memory is tight), 30 GB encrypted gp3 root volume, IMDSv2 only (hop limit 2 so containers can use the instance role), `cpu_credits` variable (default `unlimited`), 2 GB swapfile. **Elastic IP**. CloudWatch alarms auto-recover on a system status-check failure and reboot on an instance status-check failure.
+- **First boot (`user_data`)**: installs Docker, the compose plugin (checksum-verified), AWS CLI, Docker log rotation, the swapfile, and `/opt/dcf`.
+- **Network**: default VPC. Security group allows inbound TCP 80/443 and UDP 443 from anywhere (IPv4 + IPv6) and all egress. **No SSH port and no key pair** — shell access is via SSM Session Manager.
+- **Storage**: S3 artifact bucket (public access blocked, SSE-S3, TLS-only; lifecycle expires `models/` and `runs/` after 35 days, `deploy/` bundles after 90 days). ECR repositories `dcf-api` and `dcf-worker` (scan on push, keep last 10 images).
+- **IAM**:
+  - Instance role: `AmazonSSMManagedInstanceCore`, ECR pull, S3 on the artifact bucket, `ssm:GetParameter*` on `/dcf/prod/*`, `kms:Decrypt` via SSM.
+  - GitHub Actions OIDC provider + deploy role trusted only for `repo:<owner>/<repo>:ref:refs/heads/main`: ECR push, `s3:PutObject` on `deploy/*`, read of `/dcf/prod/config/*` (never secrets), `ssm:SendCommand` restricted to this instance and `AWS-RunShellScript`.
+- **Configuration**: SSM Parameter Store under `/dcf/prod/`. Terraform writes non-secret `config/*` String parameters (`APP_DOMAIN`, `PUBLIC_API_BASE_URL`, `CORS_ORIGINS`, `ACME_EMAIL`, `AWS_REGION`, `S3_BUCKET_NAME`, `ECR_REGISTRY`, `INSTANCE_ID`, `WORKER_CONCURRENCY`). Secrets (`SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`, `DATABASE_POOLER_URL`, `ANTHROPIC_API_KEY`, `FRED_API_KEY`) are SecureStrings written by `infra/scripts/put_ssm_params.sh` and **never enter Terraform state**.
+- **API hostname**: `domain_name` variable (an A record to the Elastic IP); when empty, `<eip-with-dashes>.sslip.io`, which Let's Encrypt accepts, so HTTPS works without owning a domain.
+- **Budget**: `aws_budgets_budget` (default $30/month) emailing at 80%/100% actual and 100% forecast.
+- **Outputs**: `api_url`, `api_domain`, `elastic_ip`, `instance_id`, SSM session command, ECR URLs, bucket name, `github_deploy_role_arn`, `cors_origins`.
 
-Two services, `api` and `worker`, in one cluster:
+Approximate monthly cost (us-east-1, on-demand): EC2 `t4g.small` ≈ $12.30, 30 GB gp3 ≈ $2.40, public IPv4 ≈ $3.65, S3/ECR/data transfer < $1 — **≈ $19/month**; `t4g.medium` ≈ $31/month. Vercel Hobby: $0 (non-commercial use).
 
-- **`api` service**: behind an **Application Load Balancer**, public-facing, 1 task (Fargate has no meaningful idle-cost benefit from scaling to 0, and this is a tiny app — start with `desiredCount=1`, no autoscaling needed initially). Target group health check hits `/api/health`. `stopTimeout: 120` (Fargate's max) so in-flight SSE connections drain gracefully on deploy.
-- **`worker` service**: no ALB, no public ingress — just needs outbound access to EDGAR/Yahoo/FRED/Damodaran/Anthropic/S3/Supabase, all via a NAT Gateway **or**, to avoid NAT cost on a tiny project, a public subnet + a security group that only allows *outbound* traffic (no inbound) — acceptable for a non-public service handling no inbound requests. `desiredCount=1`. `stopTimeout: 120` and the SIGTERM handling from §8.3 are what make deploys not kill an in-flight run ungracefully.
-- **Redis**: either **ElastiCache** (simplest, but check current AWS Free-Plan credit eligibility before provisioning — it draws down the $100–200 credit balance, it is not in the perpetual "Always Free" service list) or a **third ECS Fargate service running the `redis:7-alpine` image with no persistence**, which is cheaper for a tiny app that can tolerate losing queue/cache state on a redeploy (the SEC rate limiter, build locks, and cancel pub/sub are all fine to reset; nothing durable lives only in Redis — Postgres and S3 are the sources of truth). **Recommendation: self-hosted Redis-on-Fargate for this project's scale**, documented as a deliberate cost trade-off in the AWS runbook.
-- **ECR**: one repo per image (`dcf-api`, `dcf-worker`, `dcf-frontend` if containerized).
-- **Secrets**: every credential in §12's `.env.example` is injected via **ECS task-definition `secrets` (from AWS Secrets Manager or SSM Parameter Store)**, never baked into the image or committed anywhere.
+### 11.4 Deploy flow
 
-`infra/ecs/task-def-api.json` / `task-def-worker.json` are parameterized skeletons (image URI, CPU/memory, secrets ARNs, log group) — ticket 15 fills in actual ARNs once the AWS runbook (§14.2) has been run by hand.
+`.github/workflows/deploy.yml` runs on push to `main` when the repo variable `DEPLOY_ENABLED == 'true'` (otherwise a notice-only job keeps `main` green):
 
-### 11.4 S3 layout
+1. **Build** (matrix: api, worker) on an arm64 runner (`ubuntu-24.04-arm`, overridable via `ARM_RUNNER`; QEMU fallback), OIDC into the deploy role, `docker buildx build --platform linux/arm64`, push to ECR tagged with the full git SHA.
+2. **Deploy**: `infra/scripts/deploy.sh --skip-build --tag <sha>` uploads a bundle (`docker-compose.prod.yml`, `Caddyfile`, `deploy_remote.sh`) to `s3://<bucket>/deploy/<sha>.tar.gz`, then runs it on the host via **SSM Run Command** and waits for the result.
+3. **On the host** (`/opt/dcf/deploy.sh <sha>`, under a lock): render `/opt/dcf/.env` (0600) from every parameter under `/dcf/prod`; ECR login; `docker compose pull`; `alembic upgrade head` in a one-off container of the new api image — **on failure, restore the previous `.env` and leave the running stack untouched**; `docker compose up -d --remove-orphans`; reload Caddy if its config changed; wait for the api healthcheck and all four services; probe HTTPS through Caddy; record current/previous tag; prune old images.
+
+The same `deploy.sh` works from a laptop (builds with buildx unless `--skip-build`); rollback is `deploy.sh --skip-build --tag <previous-sha>`.
+
+The **frontend** deploys independently: Vercel builds `frontend/` on every push (production on `main`, previews on branches) with `NEXT_PUBLIC_API_BASE_URL=https://<api host>`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`. The API allows the Vercel production origin via `CORS_ORIGINS` (explicit origins only; preview URLs must be listed individually to call the API).
+
+### 11.5 S3 layout
 
 ```
 s3://<bucket>/
@@ -1523,9 +1496,10 @@ s3://<bucket>/
       report.pdf
   runs/{run_id}/_tmp/                                   # in-progress writes; deleted on cancel/failure,
                                                          # promoted to the final prefix on success
+  deploy/{git_sha}.tar.gz                               # deploy bundles (compose file, Caddyfile, script)
 ```
 
-Lifecycle rule: expire everything under `models/` and `runs/` after **35 days** (a backstop past the 30-day cache TTL tracked in Postgres; `cached_models.expires_at` is the real driver of what's servable, this rule just reclaims storage). `edgar-raw/` and `damodaran/` are not expired (small, and re-fetching costs SEC rate-limit budget).
+Lifecycle rule: expire `models/` and `runs/` after **35 days** (a backstop past the 30-day cache TTL tracked in Postgres; `cached_models.expires_at` is the real driver of what's servable) and `deploy/` after 90 days. `edgar-raw/` and `damodaran/` are not expired (small, and re-fetching costs SEC rate-limit budget).
 ## 12. Configuration — `.env.example`
 
 Every value below is a placeholder; nothing here is a real credential. The runbooks in §14 say exactly how to obtain each one.
@@ -1535,7 +1509,8 @@ Every value below is a placeholder; nothing here is a real credential. The runbo
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_ANON_KEY=your-anon-or-publishable-key           # safe to ship to the frontend
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-or-secret-key # backend only, never exposed to the client
-# Direct (non-pooled) connection — Alembic migrations ONLY
+# Direct (non-pooled) connection — Alembic migrations ONLY. Production stores the session-pooler value
+# here by default (put_ssm_params.sh): the direct host is IPv6-only and the EC2 host is IPv4-only.
 DATABASE_URL=postgresql+psycopg://postgres:PASSWORD@db.your-project-ref.supabase.co:5432/postgres
 # Session pooler — used by the running api/worker services
 DATABASE_POOLER_URL=postgresql+psycopg://postgres.your-project-ref:PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres
@@ -1556,9 +1531,9 @@ FRED_API_KEY=your-fred-api-key
 
 # ---------- AWS ----------
 AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=your-access-key-id          # local dev only; ECS tasks use an IAM task role instead
+AWS_ACCESS_KEY_ID=your-access-key-id          # local dev only; the EC2 host uses its instance role instead
 AWS_SECRET_ACCESS_KEY=your-secret-access-key  # local dev only
-S3_BUCKET_NAME=dcf-app-artifacts
+S3_BUCKET_NAME=dcf-app-artifacts   # production: set by Terraform (dcf-app-artifacts-<account-id>)
 
 # ---------- App/runtime ----------
 ENGINE_VERSION=v1
@@ -1571,7 +1546,40 @@ LOG_LEVEL=INFO
 # ---------- Frontend (Next.js) ----------
 NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
+# Production (Vercel): https://<api host> from `terraform output api_url`.
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+
+# ---------- API ----------
+# Comma-separated list of allowed browser origins for CORS (exact origins, no wildcards).
+# Production: the Vercel URL(s), from the Terraform variable cors_origins.
+CORS_ORIGINS=http://localhost:3000
+
+# ---------- Artifact storage ----------
+# "s3" everywhere deployed (infra/deploy/docker-compose.prod.yml pins it). "local" = dev without AWS: model.xlsx/report.pdf
+# are written under LOCAL_STORAGE_DIR and download links are short-lived HMAC-signed URLs served by the
+# API itself at GET /api/files/{path}?exp=..&sig=.. (PUBLIC_API_BASE_URL = the API origin the browser uses).
+STORAGE_BACKEND=s3
+# LOCAL_STORAGE_DIR=.local-storage
+# STORAGE_SIGNING_SECRET=change-me-for-local-links   # empty -> a fixed dev key (local backend only)
+# PUBLIC_API_BASE_URL=http://localhost:8000
+PRESIGNED_URL_TTL_SECONDS=3600
+
+# ---------- Worker (SAQ) ----------
+# SAQ_QUEUE_NAME=dcf
+# WORKER_CONCURRENCY=4
+# WORKER_SHUTDOWN_GRACE_SECONDS=60    # keep below the worker's docker compose stop_grace_period (90s)
+
+# ---------- Local development ONLY (never set these in a deployed environment) ----------
+# Used as the 10y risk-free rate when FRED_API_KEY is empty (decimal); runs get a data-confidence flag.
+# RISK_FREE_RATE_OVERRIDE=0.042
+# Offline demo: "fixtures" serves SEC EDGAR data from the bundled 20-ticker fixture set, fixed prices and
+# a fixed 4.2% risk-free rate (no SEC/Yahoo/FRED calls); every run is flagged "DEMO DATA". Default: live.
+# See docs/DEPLOYMENT.md "Offline demo mode". Set it for both the API and the worker.
+# DATA_SOURCE_MODE=fixtures
+# Accept "Authorization: Bearer dev-bypass-token" (what the frontend sends when Supabase isn't
+# configured) as a fixed dev user, auto-inserted into auth.users. Only works on a local Postgres whose
+# auth.users is the migration's stub table - never against a shared Supabase project.
+DEV_AUTH_BYPASS=false
 ```
 
 `backend/app/config.py` loads all of this via `pydantic-settings`'s `BaseSettings`, so a missing required var fails fast at startup rather than surfacing as a confusing runtime error mid-run.
@@ -1609,64 +1617,55 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 Backend CI installs `libreoffice-calc` and the WeasyPrint system libs (same apt list as the worker Dockerfile) so the recalc-verification and PDF tests run for real, runs `ruff check`, `mypy`, then `pytest --cov`, spinning up Postgres and Redis as GitHub Actions **service containers** (not the real Supabase project — CI uses a throwaway local Postgres to avoid touching shared/prod data; `DATABASE_URL` in CI points at that service container, and Alembic runs against it before the integration tests). Frontend CI runs `npm run lint`, `npm run test` (Vitest), `npm run build`, and the Playwright suite against a `next start` instance with the API fully mocked.
 ## 14. Setup runbooks (manual, human-in-the-loop)
 
-Do these once, in roughly this order, then paste the resulting values into a real `.env` (never commit it) and into ECS task-definition secrets for production.
+`docs/DEPLOYMENT.md` is the step-by-step operational runbook; this section lists what each external account must provide. Do these once, roughly in this order. Secrets go into SSM Parameter Store via `infra/scripts/put_ssm_params.sh` (never into Terraform, git, or the image).
 
 ### 14.1 Supabase
 
-1. Create a project at supabase.com (free tier is enough for ~10 users).
-2. **Project Settings → Data API** → copy the **Project URL** → `SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL`.
-3. **Project Settings → API Keys** → copy the **anon/publishable** key → `SUPABASE_ANON_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and the **service_role/secret** key → `SUPABASE_SERVICE_ROLE_KEY` (backend only — never expose this).
-4. **Project Settings → JWT** → confirm **JWT Signing Keys** shows the new **asymmetric** key type (not "legacy HS256 shared secret"). If the project predates this feature, click **Migrate JWT secret** then **rotate** to the new asymmetric key — do this *before* writing any real user data, since rotating invalidates existing sessions. Note the JWKS URL is always `{SUPABASE_URL}/auth/v1/.well-known/jwks.json` — nothing to copy, the backend derives it from `SUPABASE_URL`.
-5. **Project Settings → Database** → copy the **direct connection string** (port 5432, `db.<ref>.supabase.co` host) → `DATABASE_URL`, and the **Session pooler** connection string (port 5432, `*.pooler.supabase.com` host) → `DATABASE_POOLER_URL`. Rewrite both from `postgresql://` to `postgresql+psycopg://` for SQLAlchemy.
-6. Set the Postgres password when prompted at project creation; it goes into both connection strings above.
-7. **Authentication → Providers**: enable email (magic link or password, your call) as the sign-in method. Manually invite the ~10 users, or leave sign-up open since this app isn't sensitive — your call.
-8. Run `cd backend && alembic upgrade head` against `DATABASE_URL` to create the schema in §3.
-9. In the Supabase SQL editor, sanity-check `select * from pg_policies where schemaname = 'public';` shows the RLS policies from §3.
+1. Create a project (free tier is enough), ideally in the same region as the EC2 host.
+2. **Project Settings → Data API** → **Project URL** → `SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL`.
+3. **Project Settings → API Keys** → **anon/publishable** key → `SUPABASE_ANON_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`; **service_role/secret** key → `SUPABASE_SERVICE_ROLE_KEY` (backend only).
+4. **Project Settings → JWT** → confirm **JWT Signing Keys** uses the **asymmetric** key type (migrate + rotate before any real users exist). The JWKS URL is derived from `SUPABASE_URL`.
+5. **Project Settings → Database** → copy the **Session pooler** connection string (port 5432, `*.pooler.supabase.com`) → `DATABASE_POOLER_URL`. The direct host (`db.<ref>.supabase.co`) is IPv6-only while the EC2 host is IPv4-only, so production also runs migrations through the session pooler (`put_ssm_params.sh` stores the pooler URL as `DATABASE_URL` unless `--direct-migrations`). Use `postgresql+psycopg://` for both.
+6. **Authentication → Providers**: enable email (magic link recommended). **Authentication → URL Configuration**: Site URL and redirect URLs = the Vercel URL.
+7. Migrations run automatically on every deploy (`alembic upgrade head`); afterwards `select * from pg_policies where schemaname = 'public';` should show the §3 policies.
 
-### 14.2 AWS
+### 14.2 AWS (Terraform)
 
-**Read this first:** if this AWS account was created on or after **July 15, 2025**, it is on the new **credit-based Free Plan** — $100 in credit at signup, up to $100 more from onboarding tasks, expiring after **6 months or when the credit runs out**, whichever comes first. The old "12 months of free EC2/RDS/ALB hours" no longer applies to new accounts. **ECS Fargate, the Application Load Balancer, and ElastiCache are not on the perpetual Always-Free list** — every hour they run draws down that credit balance. Before provisioning anything:
-1. **AWS Billing → Budgets** → create a budget alarm (e.g. $20/month) *first*, so a misconfiguration doesn't quietly burn the whole credit balance unnoticed.
-2. Decide up front whether to self-host Redis on a third Fargate task (cheaper, recommended for this project's scale per §11.3) or use ElastiCache (simpler, costs more).
-
-Steps:
-1. Create an IAM user (or better, an OIDC role for GitHub Actions) with permissions scoped to ECR push, ECS deploy, S3, and Secrets Manager/SSM read — not full admin. For local dev only, generate an access key pair → `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. Production ECS tasks should use an **IAM task role**, not static keys.
-2. Create an S3 bucket (`S3_BUCKET_NAME`), block all public access, add the lifecycle rule from §11.4 (expire `models/*` and `runs/*` after 35 days).
-3. `aws ecr create-repository` for `dcf-api`, `dcf-worker`, and (if containerizing the frontend rather than using Vercel) `dcf-frontend`.
-4. Create an ECS cluster (Fargate launch type).
-5. Create a VPC (or use the default) with at least two subnets across AZs for the ALB; decide public-subnets-only (cheaper, no NAT) vs. private-subnets-with-NAT for the worker per §11.3's trade-off note.
-6. Store every secret from `.env.example` in **AWS Secrets Manager** (or SSM Parameter Store — cheaper, fine for this scale), then reference each by ARN in `infra/ecs/task-def-api.json` / `task-def-worker.json`'s `secrets` block.
-7. Create the ALB + target group (health check path `/api/health`), register the `api` service behind it.
-8. Register the `worker` service with no load balancer.
-9. If self-hosting Redis: register a third service running `redis:7-alpine` with an ECS Service Connect or Cloud Map DNS name (e.g. `redis.internal`) that `REDIS_URL` in the other two services' env points at.
-10. `infra/scripts/bootstrap_aws.sh` and `infra/scripts/deploy.sh` automate steps 3–9 for repeat deploys once the one-time setup (VPC, cluster, IAM) is done by hand.
+1. Tools: Terraform ≥ 1.10, AWS CLI v2 + Session Manager plugin, Docker with buildx (manual deploys only). An admin identity for the initial `terraform apply`.
+2. `infra/terraform/bootstrap/`: `terraform init && terraform apply` → state bucket. Copy `backend.hcl.example` → `backend.hcl`.
+3. `infra/terraform/`: copy `terraform.tfvars.example` → `terraform.tfvars` (region, `github_owner`/`github_repo`, `alert_email`, `acme_email`, `cors_origins` = the Vercel URL, optional `domain_name`, `instance_type`, `monthly_budget_usd`); `terraform init -backend-config=backend.hcl`, `terraform plan`, `terraform apply`. Commit `.terraform.lock.hcl`.
+4. `infra/scripts/put_ssm_params.sh` with a filled-in `.env` → SecureString secrets + plain `SUPABASE_URL`, `SEC_EDGAR_USER_AGENT`, `ANTHROPIC_MODEL`.
+5. Optional custom domain: A record → `elastic_ip` output, set `domain_name`, re-apply, redeploy.
+6. Confirm the budget alert email subscription.
 
 ### 14.3 Anthropic
 
-1. console.anthropic.com → create an API key → `ANTHROPIC_API_KEY`.
-2. Confirm `claude-sonnet-5` (or whatever `ANTHROPIC_MODEL` is set to) is enabled on the account/org and supports structured outputs (Sonnet 4.5+/5.x, Opus 4.5+, Haiku 4.5 all do as of this writing — re-check the Claude Platform Docs' structured-outputs compatibility table if the model is changed later).
+1. console.anthropic.com → API key → `ANTHROPIC_API_KEY`; set a monthly spend limit.
+2. Confirm `ANTHROPIC_MODEL` (default `claude-sonnet-5`) is enabled and supports structured outputs.
 
 ### 14.4 FRED
 
-1. Register a free account at fred.stlouisfed.org, then request an API key at fred.stlouisfed.org/docs/api/api_key.html → `FRED_API_KEY`. There is no keyless tier.
+1. Free account at fred.stlouisfed.org → API key → `FRED_API_KEY`. There is no keyless tier.
 
 ### 14.5 SEC EDGAR
 
-No account, no key. Just set `SEC_EDGAR_USER_AGENT` to a real identifying string with a real contact email (e.g. `"DCF-Valuation-App aman.todi01@gmail.com"`). Requests without a compliant header, or bursts over 10 req/s, get `403`'d and can trigger a temporary IP block — the app's built-in Redis token-bucket limiter (§5.1) exists specifically to prevent that; don't bypass it when testing manually against the real endpoint.
+No account or key. `SEC_EDGAR_USER_AGENT` must be a real app name + contact email (e.g. `"DCF-Valuation-App aman.todi01@gmail.com"`). The Redis-backed limiter keeps all processes under 10 req/s; don't bypass it when testing against the real endpoint.
 
 ### 14.6 Damodaran datasets
 
-No account, no key. `infra/scripts/seed_damodaran_cache.py` pulls the beta-by-industry and implied-ERP `.xls` files from `pages.stern.nyu.edu/~adamodar/pc/datasets/`, parses them, and uploads the parsed JSON to `s3://<bucket>/damodaran/`. Run this once at initial setup and again a few times a year (Damodaran republishes annually in January, with occasional mid-year updates) — there is no automatic refresh job by design. If the site ever blocks the script's requests (it's occasionally flaky about non-browser User-Agents per Damodaran's own site notes), download the `.xls` files manually in a browser and point the script at the local files with a `--from-local-dir` flag (the ticket implementing this script should include that fallback).
+`infra/scripts/seed_damodaran_cache.py` pulls the beta-by-industry, margin, and implied-ERP files from `pages.stern.nyu.edu/~adamodar/pc/datasets/`, parses them, and uploads the parsed JSON to `s3://<bucket>/damodaran/`. Run once after the first deploy (e.g. inside the worker container via SSM Session Manager) and a few times a year. If the site blocks the script, download the files in a browser and use `--from-local-dir`. Until seeded, the app uses the bundled snapshot in `app/data/macro/damodaran_snapshot.json`.
 
-### 14.7 GitHub / CI
+### 14.7 Vercel
 
-1. Create the repo, push this scaffold.
-2. **Settings → Secrets and variables → Actions**: add `AWS_ROLE_ARN` (for OIDC-based deploy, preferred) or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, plus any secrets the CI workflow needs (it should need very few — most tests mock external services; the recalc-verification test needs `libreoffice-calc` installed in the runner, not a secret).
-3. `deploy.yml` triggers on push to `main`: build + push images to ECR, then update the two ECS services' task definitions and force a new deployment.
+1. Import the GitHub repo; **Root Directory** = `frontend`; framework preset Next.js.
+2. Environment variables (Production, and Preview if used): `NEXT_PUBLIC_API_BASE_URL` = `terraform output api_url`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+3. Deploys are automatic on push. Add the production Vercel URL to Terraform `cors_origins`, `terraform apply`, and redeploy the API.
 
-### 14.8 Frontend hosting decision
+### 14.8 GitHub
 
-If deploying the frontend on **Vercel** instead of ECS (a reasonable simplification — see §11.1's note): connect the GitHub repo in the Vercel dashboard, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `NEXT_PUBLIC_API_BASE_URL` (pointing at the ALB's DNS name or a custom domain in front of it) as Vercel environment variables, and skip `Dockerfile.frontend`/the ECS frontend service entirely.
+1. **Settings → Secrets and variables → Actions**: secret `AWS_DEPLOY_ROLE_ARN` (`terraform output github_deploy_role_arn`); variables `DEPLOY_ENABLED=true`, optional `AWS_REGION`, `ARM_RUNNER`.
+2. CI (`ci-backend.yml`, `ci-frontend.yml`) needs no secrets; everything external is mocked.
+3. `deploy.yml` runs on push to `main` per §11.4.
 ## 15. Ticket breakdown (15 tickets, designed for parallel execution)
 
 **Orchestration model for the parent session:** run **Ticket 1 alone first** and wait for it to merge — everything else imports its schemas and reads its repo layout. Once it's done, launch the **10 tickets in Batch 1 as parallel sessions/subagents** (they only depend on Ticket 1 and on each other's *interfaces*, which are already fully specified in §§4–10 above, so they can be built against those contracts and fixture data without waiting on one another's actual code). Then run Batch 2, 3, 4 in order. Each ticket's own unit tests are part of its deliverable, not deferred to Ticket 14 — Ticket 14 is integration tests, the 20-ticker fixture set, and CI hardening across everything.
@@ -1788,9 +1787,8 @@ Every ticket should open its own PR/branch against `main`, include tests, and no
 
 **Ticket 15 — Deployment**
 *Depends on: 1, 11, 12, 13.*
-- Executes the AWS runbook (§14.2) by hand: VPC/subnets, ECS cluster, ALB, ECR repos, IAM roles, Secrets Manager entries, the Redis decision (self-hosted Fargate task vs. ElastiCache — implement whichever was chosen).
-- Fills in real values in `infra/ecs/task-def-api.json`/`task-def-worker.json` (image URIs, secret ARNs, log group), writes `infra/scripts/bootstrap_aws.sh` and `deploy.sh`.
-- Wires `deploy.yml` (build/push/deploy on merge to `main`).
-- Decides and implements the frontend hosting path (§14.8: ECS-containerized vs. Vercel) and documents the choice.
-- Runs the Supabase (§14.1), Anthropic (§14.3), FRED (§14.4), SEC EDGAR (§14.5), and Damodaran (§14.6) runbooks end to end against real (not placeholder) values, and confirms a real ticker produces a real Excel + PDF through the deployed system.
-- **This ticket is the one that needs a human to actually click around in AWS/Supabase/Anthropic consoles** — flag clearly in the PR which steps require the account owner's action versus which are scriptable.
+- Terraform under `infra/terraform/` per §11.3 (bootstrap state bucket, EC2 host + Elastic IP + security group, S3, ECR, IAM instance role, GitHub OIDC deploy role, SSM config parameters, budget, status-check alarms), with `terraform fmt`/`validate` clean.
+- `infra/deploy/docker-compose.prod.yml` + `Caddyfile` per §11.2; arm64 Dockerfiles per §11.1.
+- `infra/scripts/put_ssm_params.sh`, `deploy.sh`, `deploy_remote.sh` and `.github/workflows/deploy.yml` per §11.4 (gated on `DEPLOY_ENABLED`).
+- `docs/DEPLOYMENT.md`: the full runbook (§14) split into owner-manual vs. scripted steps, operations (SSM shell, logs, restart, rollback, resize, teardown), cost table, and local-dev/offline-demo instructions.
+- Runs the §14 runbooks end to end against real values and confirms a real ticker produces a real Excel + PDF through the deployed system — **the steps requiring the account owner (AWS, Supabase, Anthropic, FRED, Vercel, GitHub settings) are flagged explicitly.**

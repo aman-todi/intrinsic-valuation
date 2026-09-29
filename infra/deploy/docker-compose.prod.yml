@@ -84,7 +84,7 @@ services:
 
   redis:
     # Queue, locks, rate limiter and SSE fan-out only; no persistence by design (Postgres + S3 are the
-    # sources of truth). A restart drops queued jobs, which the app tolerates (§11.3).
+    # sources of truth). A restart drops queued jobs, which the app tolerates (§11.2).
     image: redis:7-alpine
     restart: unless-stopped
     command:
