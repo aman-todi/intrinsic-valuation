@@ -1408,8 +1408,9 @@ browser ──HTTPS──> Vercel (Next.js frontend)
    └──HTTPS (CORS)──> EC2 t4g.small, Elastic IP
                        └─ docker compose: caddy :80/:443 ──> api:8000 (uvicorn)
                                                               worker (SAQ) ──> redis:6379 <── api
-                          api/worker ──> Supabase Postgres (session pooler) · S3 · ECR (pull)
-                                     ──> SEC EDGAR · Yahoo · FRED · Anthropic (egress)
+                          api/worker ──> RDS PostgreSQL (private, TLS) · S3 · ECR (pull)
+                                     ──> SEC EDGAR · Yahoo · FRED · Anthropic · Cognito JWKS (egress)
+browser ──> Cognito managed login (sign-in, token refresh)
 ```
 
 ### 11.1 Dockerfiles
@@ -1422,7 +1423,7 @@ All images build for **`linux/arm64`** (Graviton).
 
 ### 11.2 docker-compose
 
-**Local dev (`docker-compose.yml`)**: `redis`, `api`, `worker`, `frontend`, reading `.env`. Postgres is either the dev Supabase project or a local Postgres 16. Offline demo mode (`DATA_SOURCE_MODE=fixtures`, `STORAGE_BACKEND=local`, `DEV_AUTH_BYPASS=true`) runs the full flow with no external services.
+**Local dev (`docker-compose.yml`)**: `db` (postgres:16), `redis`, `api`, `worker`, `frontend`, reading `.env`. Auth is either `DEV_AUTH_BYPASS=true` (no Cognito) or the real user pool via its `http://localhost:3000` callback URLs. Offline demo mode (`DATA_SOURCE_MODE=fixtures`, `STORAGE_BACKEND=local`, `DEV_AUTH_BYPASS=true`) runs the full flow with no external services.
 
 **Production (`infra/deploy/docker-compose.prod.yml`)** on the EC2 host, project name `dcf`, all services `restart: unless-stopped` with json-file log rotation (10 MB × 5):
 
@@ -1442,16 +1443,18 @@ State lives in an S3 bucket created once by `infra/terraform/bootstrap/` (versio
 - **Compute**: one EC2 instance, Amazon Linux 2023 arm64 (AMI from the public SSM parameter), `instance_type` variable (default `t4g.small`; `t4g.medium` when memory is tight), 30 GB encrypted gp3 root volume, IMDSv2 only (hop limit 2 so containers can use the instance role), `cpu_credits` variable (default `unlimited`), 2 GB swapfile. **Elastic IP**. CloudWatch alarms auto-recover on a system status-check failure and reboot on an instance status-check failure.
 - **First boot (`user_data`)**: installs Docker, the compose plugin (checksum-verified), AWS CLI, Docker log rotation, the swapfile, and `/opt/dcf`.
 - **Network**: default VPC. Security group allows inbound TCP 80/443 and UDP 443 from anywhere (IPv4 + IPv6) and all egress. **No SSH port and no key pair** — shell access is via SSM Session Manager.
+- **Auth (`auth.tf`)**: Cognito user pool (Essentials tier; email as username, auto-verified; first factors password and email one-time code; optional TOTP MFA; account recovery by email; invite-only unless `cognito_allow_self_signup`; Cognito default email sender, SES as the upgrade path; deletion protection). Managed-login domain `dcf-<suffix>.auth.<region>.amazoncognito.com` with Cognito-provided branding. Public app client `dcf-web` (no secret, code flow + PKCE, scopes `openid email`, callbacks `<origin>/auth/callback` and sign-out `<origin>/` for each of `frontend_origins` plus localhost; access/ID tokens 1 h, refresh 30 d; token revocation on).
+- **Database (`database.tf`)**: RDS PostgreSQL 17 `db.t4g.micro`, 20 GB gp3 (autoscaling to 50 GB), encrypted, single-AZ in the app host's AZ, not publicly accessible, security group allowing 5432 **only from the app host's security group**, parameter group with `rds.force_ssl = 1`, 7-day automated backups, deletion protection and a final snapshot. Terraform generates the password (`random_password`) and writes `DATABASE_URL` (`…?sslmode=require`) to SSM as a SecureString; the value therefore also lives in the encrypted, private state bucket.
 - **Storage**: S3 artifact bucket (public access blocked, SSE-S3, TLS-only; lifecycle expires `models/` and `runs/` after 35 days, `deploy/` bundles after 90 days). ECR repositories `dcf-api` and `dcf-worker` (scan on push, keep last 10 images).
 - **IAM**:
   - Instance role: `AmazonSSMManagedInstanceCore`, ECR pull, S3 on the artifact bucket, `ssm:GetParameter*` on `/dcf/prod/*`, `kms:Decrypt` via SSM.
   - GitHub Actions OIDC provider + deploy role trusted only for `repo:<owner>/<repo>:ref:refs/heads/main`: ECR push, `s3:PutObject` on `deploy/*`, read of `/dcf/prod/config/*` (never secrets), `ssm:SendCommand` restricted to this instance and `AWS-RunShellScript`.
-- **Configuration**: SSM Parameter Store under `/dcf/prod/`. Terraform writes non-secret `config/*` String parameters (`APP_DOMAIN`, `PUBLIC_API_BASE_URL`, `CORS_ORIGINS`, `ACME_EMAIL`, `AWS_REGION`, `S3_BUCKET_NAME`, `ECR_REGISTRY`, `INSTANCE_ID`, `WORKER_CONCURRENCY`). Secrets (`SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`, `DATABASE_POOLER_URL`, `ANTHROPIC_API_KEY`, `FRED_API_KEY`) are SecureStrings written by `infra/scripts/put_ssm_params.sh` and **never enter Terraform state**.
+- **Configuration**: SSM Parameter Store under `/dcf/prod/`. Terraform writes non-secret `config/*` String parameters (`APP_DOMAIN`, `PUBLIC_API_BASE_URL`, `CORS_ORIGINS` (from `frontend_origins`), `ACME_EMAIL`, `AWS_REGION`, `S3_BUCKET_NAME`, `ECR_REGISTRY`, `INSTANCE_ID`, `WORKER_CONCURRENCY`, `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`) and the `DATABASE_URL` SecureString. Owner-supplied secrets (`ANTHROPIC_API_KEY`, `FRED_API_KEY`) plus plain `SEC_EDGAR_USER_AGENT`/`ANTHROPIC_MODEL` are written by `infra/scripts/put_ssm_params.sh` and never enter Terraform state.
 - **API hostname**: `domain_name` variable (an A record to the Elastic IP); when empty, `<eip-with-dashes>.sslip.io`, which Let's Encrypt accepts, so HTTPS works without owning a domain.
-- **Budget**: `aws_budgets_budget` (default $30/month) emailing at 80%/100% actual and 100% forecast.
-- **Outputs**: `api_url`, `api_domain`, `elastic_ip`, `instance_id`, SSM session command, ECR URLs, bucket name, `github_deploy_role_arn`, `cors_origins`.
+- **Budget**: `aws_budgets_budget` (default $45/month) emailing at 80%/100% actual and 100% forecast.
+- **Outputs**: `api_url`, `api_domain`, `elastic_ip`, `instance_id`, SSM session and DB port-forward commands, ECR URLs, bucket name, `github_deploy_role_arn`, `frontend_origins`, Cognito (`cognito_domain_url`, `cognito_client_id`, `cognito_user_pool_id`, `cognito_region`) and `vercel_env` (all five `NEXT_PUBLIC_*` values), `rds_endpoint`.
 
-Approximate monthly cost (us-east-1, on-demand): EC2 `t4g.small` ≈ $12.30, 30 GB gp3 ≈ $2.40, public IPv4 ≈ $3.65, S3/ECR/data transfer < $1 — **≈ $19/month**; `t4g.medium` ≈ $31/month. Vercel Hobby: $0 (non-commercial use).
+Approximate monthly cost (us-east-1, on-demand): EC2 `t4g.small` ≈ $12.30, 30 GB gp3 ≈ $2.40, public IPv4 ≈ $3.65, RDS `db.t4g.micro` ≈ $11.70 + 20 GB gp3 ≈ $2.30 (backups within the free allowance), S3/ECR/data transfer < $1 — **≈ $33–35/month**; Cognito Essentials costs nothing at this user count; `t4g.medium` for the app host adds ≈ $12. Vercel Hobby: $0 (non-commercial use).
 
 ### 11.4 Deploy flow
 
@@ -1461,9 +1464,9 @@ Approximate monthly cost (us-east-1, on-demand): EC2 `t4g.small` ≈ $12.30, 30 
 2. **Deploy**: `infra/scripts/deploy.sh --skip-build --tag <sha>` uploads a bundle (`docker-compose.prod.yml`, `Caddyfile`, `deploy_remote.sh`) to `s3://<bucket>/deploy/<sha>.tar.gz`, then runs it on the host via **SSM Run Command** and waits for the result.
 3. **On the host** (`/opt/dcf/deploy.sh <sha>`, under a lock): render `/opt/dcf/.env` (0600) from every parameter under `/dcf/prod`; ECR login; `docker compose pull`; `alembic upgrade head` in a one-off container of the new api image — **on failure, restore the previous `.env` and leave the running stack untouched**; `docker compose up -d --remove-orphans`; reload Caddy if its config changed; wait for the api healthcheck and all four services; probe HTTPS through Caddy; record current/previous tag; prune old images.
 
-The same `deploy.sh` works from a laptop (builds with buildx unless `--skip-build`); rollback is `deploy.sh --skip-build --tag <previous-sha>`.
+Migrations run against RDS from the host (the only machine that can reach it). The same `deploy.sh` works from a laptop (builds with buildx unless `--skip-build`); rollback is `deploy.sh --skip-build --tag <previous-sha>`.
 
-The **frontend** deploys independently: Vercel builds `frontend/` on every push (production on `main`, previews on branches) with `NEXT_PUBLIC_API_BASE_URL=https://<api host>`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`. The API allows the Vercel production origin via `CORS_ORIGINS` (explicit origins only; preview URLs must be listed individually to call the API).
+The **frontend** deploys independently: Vercel builds `frontend/` on every push (production on `main`, previews on branches) with `NEXT_PUBLIC_API_BASE_URL=https://<api host>` and `NEXT_PUBLIC_COGNITO_DOMAIN`, `NEXT_PUBLIC_COGNITO_CLIENT_ID`, `NEXT_PUBLIC_COGNITO_USER_POOL_ID`, `NEXT_PUBLIC_COGNITO_REGION` (all from `terraform output vercel_env`). Each production frontend origin goes in the Terraform variable `frontend_origins`, the single source for API CORS and the Cognito callback/sign-out URLs (explicit origins only; preview URLs must be listed individually).
 
 ### 11.5 S3 layout
 
@@ -1488,15 +1491,17 @@ Lifecycle rule: expire `models/` and `runs/` after **35 days** (a backstop past 
 Every value below is a placeholder; nothing here is a real credential. The runbooks in §14 say exactly how to obtain each one.
 
 ```dotenv
-# ---------- Supabase ----------
-SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_ANON_KEY=your-anon-or-publishable-key           # safe to ship to the frontend
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-or-secret-key # backend only, never exposed to the client
-# Direct (non-pooled) connection — Alembic migrations ONLY. Production stores the session-pooler value
-# here by default (put_ssm_params.sh): the direct host is IPv6-only and the EC2 host is IPv4-only.
-DATABASE_URL=postgresql+psycopg://postgres:PASSWORD@db.your-project-ref.supabase.co:5432/postgres
-# Session pooler — used by the running api/worker services
-DATABASE_POOLER_URL=postgresql+psycopg://postgres.your-project-ref:PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+# ---------- Auth (AWS Cognito) ----------
+# The API accepts Cognito ACCESS tokens issued by this user pool to this app client (RS256, verified
+# against https://cognito-idp.<region>.amazonaws.com/<pool id>/.well-known/jwks.json).
+COGNITO_REGION=us-east-1
+COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
+COGNITO_APP_CLIENT_ID=your-app-client-id
+
+# ---------- Postgres ----------
+# One URL for the api, the worker AND Alembic. Local: the `db` service in docker-compose.yml.
+# Production (AWS RDS): postgresql+psycopg://USER:PASSWORD@<rds-endpoint>:5432/dcf?sslmode=require
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/postgres
 
 # ---------- Redis ----------
 REDIS_URL=redis://localhost:6379
@@ -1527,14 +1532,17 @@ BUILD_LOCK_TTL_SECONDS=120
 LOG_LEVEL=INFO
 
 # ---------- Frontend (Next.js) ----------
-NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
+# Leave NEXT_PUBLIC_COGNITO_CLIENT_ID empty for the dev auth bypass (see DEV_AUTH_BYPASS below).
+NEXT_PUBLIC_COGNITO_DOMAIN=https://your-domain-prefix.auth.us-east-1.amazoncognito.com
+NEXT_PUBLIC_COGNITO_CLIENT_ID=your-app-client-id
+NEXT_PUBLIC_COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
+NEXT_PUBLIC_COGNITO_REGION=us-east-1
 # Production (Vercel): https://<api host> from `terraform output api_url`.
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 
 # ---------- API ----------
 # Comma-separated list of allowed browser origins for CORS (exact origins, no wildcards).
-# Production: the Vercel URL(s), from the Terraform variable cors_origins.
+# Production: the Vercel URL(s), from the Terraform variable frontend_origins.
 CORS_ORIGINS=http://localhost:3000
 
 # ---------- Artifact storage ----------
@@ -1559,9 +1567,9 @@ PRESIGNED_URL_TTL_SECONDS=3600
 # a fixed 4.2% risk-free rate (no SEC/Yahoo/FRED calls); every run is flagged "DEMO DATA". Default: live.
 # See docs/DEPLOYMENT.md "Offline demo mode". Set it for both the API and the worker.
 # DATA_SOURCE_MODE=fixtures
-# Accept "Authorization: Bearer dev-bypass-token" (what the frontend sends when Supabase isn't
-# configured) as a fixed dev user, auto-inserted into auth.users. Only works on a local Postgres whose
-# auth.users is the migration's stub table - never against a shared Supabase project.
+# Accept "Authorization: Bearer dev-bypass-token" (what the frontend sends when
+# NEXT_PUBLIC_COGNITO_CLIENT_ID is unset) as a fixed dev user, auto-inserted into `users`.
+# Local Postgres only - never against a shared/production database.
 DEV_AUTH_BYPASS=false
 ```
 
@@ -1599,30 +1607,25 @@ The suite is deliberately lean: **≤ 200 tests in total** (backend + frontend, 
 
 ### 13.3 CI (`.github/workflows/ci-backend.yml`, `ci-frontend.yml`)
 
-Backend CI installs `libreoffice-calc` and the WeasyPrint system libraries (the worker image's apt list) so recalc-verification and PDF tests run for real, starts Postgres 16 and Redis 7 as GitHub Actions service containers (Alembic runs against them before integration tests; CI never touches the Supabase project), then runs `ruff check`, `ruff format --check`, `mypy` on the engine/classifier/assumptions/schemas/runs packages, and `pytest --cov --cov-fail-under=75` plus the `app/valuation ≥ 85%` gate. Frontend CI runs on Node 24: `npm ci`, `npm run lint` (ESLint + `tsc`), Vitest, `npm run build`, and Playwright (Chromium) against a `next start` instance with the API mocked.
+Backend CI installs `libreoffice-calc` and the WeasyPrint system libraries (the worker image's apt list) so recalc-verification and PDF tests run for real, starts Postgres 16 and Redis 7 as GitHub Actions service containers (Alembic runs against them before integration tests; CI never touches the production database), then runs `ruff check`, `ruff format --check`, `mypy` on the engine/classifier/assumptions/schemas/runs packages, and `pytest --cov --cov-fail-under=75` plus the `app/valuation ≥ 85%` gate. Frontend CI runs on Node 24: `npm ci`, `npm run lint` (ESLint + `tsc`), Vitest, `npm run build`, and Playwright (Chromium) against a `next start` instance with the API mocked.
 
 ## 14. Setup runbooks (manual, human-in-the-loop)
 
-`docs/DEPLOYMENT.md` is the step-by-step operational runbook; this section lists what each external account must provide. Do these once, roughly in this order. Secrets go into SSM Parameter Store via `infra/scripts/put_ssm_params.sh` (never into Terraform, git, or the image).
+`docs/DEPLOYMENT.md` is the step-by-step operational runbook; this section lists what each external account must provide. Do these once, roughly in this order. Owner-supplied secrets go into SSM Parameter Store via `infra/scripts/put_ssm_params.sh` (never into git or the image); Cognito and database settings are produced by Terraform.
 
-### 14.1 Supabase
+### 14.1 AWS (Terraform: host, database, auth)
 
-1. Create a project (free tier is enough), ideally in the same region as the EC2 host.
-2. **Project Settings → Data API** → **Project URL** → `SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL`.
-3. **Project Settings → API Keys** → **anon/publishable** key → `SUPABASE_ANON_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`; **service_role/secret** key → `SUPABASE_SERVICE_ROLE_KEY` (backend only).
-4. **Project Settings → JWT** → confirm **JWT Signing Keys** uses the **asymmetric** key type (migrate + rotate before any real users exist). The JWKS URL is derived from `SUPABASE_URL`.
-5. **Project Settings → Database** → copy the **Session pooler** connection string (port 5432, `*.pooler.supabase.com`) → `DATABASE_POOLER_URL`. The direct host (`db.<ref>.supabase.co`) is IPv6-only while the EC2 host is IPv4-only, so production also runs migrations through the session pooler (`put_ssm_params.sh` stores the pooler URL as `DATABASE_URL` unless `--direct-migrations`). Use `postgresql+psycopg://` for both.
-6. **Authentication → Providers**: enable email (magic link recommended). **Authentication → URL Configuration**: Site URL and redirect URLs = the Vercel URL.
-7. Migrations run automatically on every deploy (`alembic upgrade head`); afterwards `select * from pg_policies where schemaname = 'public';` should show the §3 policies.
+1. Tools: Terraform ≥ 1.10, AWS CLI v2 + Session Manager plugin, Docker with buildx (manual deploys only), optionally `psql`. An admin identity for the initial `terraform apply`.
+2. `infra/terraform/bootstrap/`: `terraform init && terraform apply` → state bucket; write `backend.hcl` from its output.
+3. `infra/terraform/`: copy `terraform.tfvars.example` → `terraform.tfvars` (region, `github_owner`/`github_repo`, `alert_email`, `acme_email`, `frontend_origins = []` initially, optional `domain_name`, `instance_type`, Cognito options such as `cognito_allow_self_signup` and `cognito_email_otp_enabled`, database options such as `db_instance_class`); `terraform init -backend-config=backend.hcl`, `terraform plan`, `terraform apply` (RDS creation takes ~5–10 minutes). Commit `.terraform.lock.hcl`.
+4. `infra/scripts/put_ssm_params.sh` with a filled-in `.env` → `ANTHROPIC_API_KEY`, `FRED_API_KEY` (SecureString), `SEC_EDGAR_USER_AGENT`, `ANTHROPIC_MODEL`.
+5. Migrations run automatically on every deploy (`alembic upgrade head` from the app host). To inspect the database, open an SSM port-forward through the host (`terraform output db_port_forward_command`) and connect with `psql`.
+6. Optional custom API domain: A record → `elastic_ip` output, set `domain_name`, re-apply, redeploy.
+7. Confirm the budget alert email subscription.
 
-### 14.2 AWS (Terraform)
+### 14.2 Cognito users
 
-1. Tools: Terraform ≥ 1.10, AWS CLI v2 + Session Manager plugin, Docker with buildx (manual deploys only). An admin identity for the initial `terraform apply`.
-2. `infra/terraform/bootstrap/`: `terraform init && terraform apply` → state bucket. Copy `backend.hcl.example` → `backend.hcl`.
-3. `infra/terraform/`: copy `terraform.tfvars.example` → `terraform.tfvars` (region, `github_owner`/`github_repo`, `alert_email`, `acme_email`, `cors_origins` = the Vercel URL, optional `domain_name`, `instance_type`, `monthly_budget_usd`); `terraform init -backend-config=backend.hcl`, `terraform plan`, `terraform apply`. Commit `.terraform.lock.hcl`.
-4. `infra/scripts/put_ssm_params.sh` with a filled-in `.env` → SecureString secrets + plain `SUPABASE_URL`, `SEC_EDGAR_USER_AGENT`, `ANTHROPIC_MODEL`.
-5. Optional custom domain: A record → `elastic_ip` output, set `domain_name`, re-apply, redeploy.
-6. Confirm the budget alert email subscription.
+Users are invited, not self-registered (unless `cognito_allow_self_signup = true`): `aws cognito-idp admin-create-user --user-pool-id <pool> --username <email> --user-attributes Name=email,Value=<email> Name=email_verified,Value=true`, or **Cognito console → User pools → dcf-users → Users → Create user**. The invite email carries a temporary password; users can then sign in with password or an emailed one-time code. The default Cognito email sender is limited to ~50 emails/day — configure SES if that becomes a constraint. The app's `users` row is created automatically on each user's first API call.
 
 ### 14.3 Anthropic
 
@@ -1639,13 +1642,13 @@ No account or key. `SEC_EDGAR_USER_AGENT` must be a real app name + contact emai
 
 ### 14.6 Damodaran datasets
 
-`infra/scripts/seed_damodaran_cache.py` pulls the beta-by-industry, margin, and implied-ERP files from `pages.stern.nyu.edu/~adamodar/pc/datasets/`, parses them, and uploads the parsed JSON to `s3://<bucket>/damodaran/`. Run once after the first deploy (e.g. inside the worker container via SSM Session Manager) and a few times a year. If the site blocks the script, download the files in a browser and use `--from-local-dir`. Until seeded, the app uses the bundled snapshot in `app/data/macro/damodaran_snapshot.json`.
+`infra/scripts/seed_damodaran_cache.py` pulls the beta-by-industry, margin, and implied-ERP files from `pages.stern.nyu.edu/~adamodar/pc/datasets/`, parses them, and uploads the parsed JSON to `s3://<bucket>/damodaran/`. Run once after the first deploy and a few times a year. If the site blocks the script, download the files in a browser and use `--from-local-dir`. Until seeded, the app uses the bundled snapshot in `app/data/macro/damodaran_snapshot.json`.
 
 ### 14.7 Vercel
 
 1. Import the GitHub repo; **Root Directory** = `frontend`; framework preset Next.js.
-2. Environment variables (Production, and Preview if used): `NEXT_PUBLIC_API_BASE_URL` = `terraform output api_url`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
-3. Deploys are automatic on push. Add the production Vercel URL to Terraform `cors_origins`, `terraform apply`, and redeploy the API.
+2. Environment variables (Production, and Preview if used): the five values from `terraform output vercel_env` — `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_COGNITO_DOMAIN`, `NEXT_PUBLIC_COGNITO_CLIENT_ID`, `NEXT_PUBLIC_COGNITO_USER_POOL_ID`, `NEXT_PUBLIC_COGNITO_REGION`.
+3. Deploys are automatic on push. Add the production Vercel URL to `frontend_origins` (API CORS + Cognito callback/sign-out URLs), `terraform apply`, and redeploy the API.
 
 ### 14.8 GitHub
 
@@ -1768,12 +1771,12 @@ Every ticket should open its own PR/branch against `main`, include tests, and no
 *Depends on: everything (runs last, or continuously alongside others as a living ticket that starts early collecting fixtures and finishes after Batch 3).*
 - Completes the 20-ticker EDGAR fixture set (every model type and decline reason) and reconciles it with the classifier and engines (§13.1).
 - Keeps the suite within the §13 budget (≤ 200 tests) while meeting the coverage floors (backend ≥ 75%, `app/valuation` ≥ 85%).
-- Finalizes `ci-backend.yml`/`ci-frontend.yml` with the coverage gates, the `libreoffice-calc` + WeasyPrint system-dependency install step, service containers, and the Playwright browser install step; documents in `docs/TESTING.md` why CI uses a local Postgres service container rather than a Supabase branch.
+- Finalizes `ci-backend.yml`/`ci-frontend.yml` with the coverage gates, the `libreoffice-calc` + WeasyPrint system-dependency install step, service containers, and the Playwright browser install step; documents in `docs/TESTING.md` why CI uses a local Postgres service container rather than a cloud database.
 
 **Ticket 15 — Deployment**
 *Depends on: 1, 11, 12, 13.*
-- Terraform under `infra/terraform/` per §11.3 (bootstrap state bucket, EC2 host + Elastic IP + security group, S3, ECR, IAM instance role, GitHub OIDC deploy role, SSM config parameters, budget, status-check alarms), with `terraform fmt`/`validate` clean.
+- Terraform under `infra/terraform/` per §11.3 (bootstrap state bucket, EC2 host + Elastic IP + security group, RDS PostgreSQL, Cognito user pool + app client + managed-login domain, S3, ECR, IAM instance role, GitHub OIDC deploy role, SSM parameters, budget, status-check alarms), with `terraform fmt`/`validate` clean.
 - `infra/deploy/docker-compose.prod.yml` + `Caddyfile` per §11.2; arm64 Dockerfiles per §11.1.
 - `infra/scripts/put_ssm_params.sh`, `deploy.sh`, `deploy_remote.sh` and `.github/workflows/deploy.yml` per §11.4 (gated on `DEPLOY_ENABLED`).
 - `docs/DEPLOYMENT.md`: the full runbook (§14) split into owner-manual vs. scripted steps, operations (SSM shell, logs, restart, rollback, resize, teardown), cost table, and local-dev/offline-demo instructions.
-- Runs the §14 runbooks end to end against real values and confirms a real ticker produces a real Excel + PDF through the deployed system — **the steps requiring the account owner (AWS, Supabase, Anthropic, FRED, Vercel, GitHub settings) are flagged explicitly.**
+- Runs the §14 runbooks end to end against real values and confirms a real ticker produces a real Excel + PDF through the deployed system — **the steps requiring the account owner (AWS, Cognito users, Anthropic, FRED, Vercel, GitHub settings) are flagged explicitly.**
