@@ -197,6 +197,8 @@ aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice@exampl
 
 **Console:** **Amazon Cognito → User pools → `dcf-users` → User management → Users → Create user**. Choose **Send an email invitation**, enter the email address, tick **Mark email address as verified**, choose **Generate a password**, and click **Create user**.
 
+Users only need to exist in Cognito. There is nothing to create in the database: the API upserts a `users` row (keyed by the token's `sub`) on each user's first authenticated request.
+
 Day-to-day user administration is in [Operations](#cognito-user-administration).
 
 ### Email sending limits
@@ -390,6 +392,7 @@ sudo SKIP_MIGRATIONS=true /opt/dcf/deploy.sh <sha>   # re-run / roll back from t
 | **Rotate the DB password** | [Below](#rotate-the-database-password). |
 | **Backups** | RDS: automated daily snapshots plus transaction logs, **7 days** of point-in-time restore; [restore below](#database-backups-and-restore). Take a manual snapshot before risky migrations. Artifacts in S3 are regenerable caches. The only local state on the box is the `caddy_data` volume (certificates), which is re-issued automatically if lost; avoid destroying it repeatedly, because of Let's Encrypt rate limits. |
 | **OS patches** | Monthly, from a session: `sudo dnf upgrade --releasever=latest -y && sudo reboot`. Docker and every container (`restart: unless-stopped`) come back on their own. RDS minor versions are patched automatically in the Sunday maintenance window. |
+| **DB connections** | Each app process opens at most 10 connections (SQLAlchemy pool 5 + 5 overflow): 2 uvicorn workers + 1 SAQ worker = **≤ 30**, plus one short-lived Alembic container per deploy. `db.t4g.micro` allows roughly 80–110 (`max_connections` scales with RAM; `show max_connections;`), so there is ample headroom for a tunnelled `psql`. Raise `worker_concurrency` or uvicorn workers with this budget in mind. |
 | **Disk** | `docker system df`. Each deploy prunes unused images. The root volume is 30 GB. RDS storage grows automatically up to 50 GB (`db_max_allocated_storage_gb`); it never shrinks. |
 | **Host failure** | EC2 auto-recovery, plus the CloudWatch alarms that recover or reboot the instance. The EIP, volume and instance id stay the same. RDS is single-AZ: an AZ outage takes the DB down until AWS recovers it (or you restore to another AZ). |
 | **Pause to save money** | `aws ec2 stop-instances --instance-ids <id>` stops compute billing, and `aws rds stop-db-instance --db-instance-identifier dcf-db` stops DB compute (RDS restarts it automatically after 7 days). The EIP (about $3.65/month) and all storage still bill. |
@@ -460,7 +463,7 @@ Minor versions upgrade automatically. For a major version (for example 17 → 18
 | Force sign-out everywhere | `aws cognito-idp admin-user-global-sign-out --user-pool-id "$POOL" --username alice@example.com` (revokes refresh tokens; access tokens stay valid until they expire, ≤ 1 h) |
 | Reset password | `aws cognito-idp admin-reset-user-password --user-pool-id "$POOL" --username alice@example.com` (emails a code) |
 | Remove a lost authenticator app | `aws cognito-idp admin-set-user-mfa-preference --user-pool-id "$POOL" --username alice@example.com --software-token-mfa-settings Enabled=false` |
-| Delete | `aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username alice@example.com` (the user's rows in Postgres are not deleted) |
+| Delete | `aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username alice@example.com` (the user's `users` row and runs in Postgres are not deleted; deleting the `users` row cascades to their runs) |
 
 The API sees the user's Cognito `sub` (a UUID) in the access token. Access tokens do not carry the email address.
 
@@ -524,13 +527,12 @@ Not implemented, documented for when $14/month matters more than managed backups
 ### Option A: docker compose
 
 ```bash
-cp .env.example .env     # real dev values; DATABASE_URL can point at a local Postgres
-docker compose up --build   # redis :6379, api :8000, worker, frontend :3000 (uses infra/docker/Dockerfile.*)
+cp .env.example .env     # dev values
+docker compose up --build   # db (postgres:16) :5432, redis :6379, api :8000, worker, frontend :3000
+docker compose run --rm api alembic upgrade head   # once, and after pulling new migrations
 ```
 
-Compose overrides `REDIS_URL` to point at the redis container. The frontend image is built with `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` and the `NEXT_PUBLIC_COGNITO_*` build args from `.env`. If those are empty, the frontend uses the dev auth bypass.
-
-Inside the containers, `localhost` means the container itself. To use a Postgres running on the host, set the URL to `host.docker.internal` on macOS or Windows. On Linux, add `extra_hosts: ["host.docker.internal:host-gateway"]`.
+Compose runs a throwaway Postgres (`db`) and overrides `DATABASE_URL` and `REDIS_URL` for the api and worker to point at the `db` and `redis` containers. The frontend image is built with `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` and the `NEXT_PUBLIC_COGNITO_*` build args from `.env`. If `NEXT_PUBLIC_COGNITO_CLIENT_ID` is empty, the frontend uses the dev auth bypass (set `DEV_AUTH_BYPASS=true` for the API in `.env`).
 
 To try the production compose file locally, run `docker compose -f infra/deploy/docker-compose.prod.yml config` with a filled-in `.env`. It pulls from ECR and needs a public hostname for the certificate, so it is not meant for laptops.
 
@@ -555,7 +557,7 @@ npm run dev:mock     # UI only, API mocked with MSW - no backend needed
 ```
 
 Auth, two options:
-- **No Cognito (default for local work):** set `DEV_AUTH_BYPASS=true` on the API and leave the `NEXT_PUBLIC_COGNITO_*` values unset in the frontend. The frontend sends `Bearer dev-bypass-token` and the API maps it to a fixed dev user. **Never** enable this in production; `docker-compose.prod.yml` pins `DEV_AUTH_BYPASS=false`.
+- **No Cognito (default for local work):** set `DEV_AUTH_BYPASS=true` on the API and leave `NEXT_PUBLIC_COGNITO_CLIENT_ID` unset in the frontend. The frontend sends `Bearer dev-bypass-token` and the API maps it to a fixed dev user, which it upserts into `users`. **Never** enable this in production; `docker-compose.prod.yml` pins `DEV_AUTH_BYPASS=false`.
 - **Real Cognito:** with `cognito_localhost_callbacks = true` (the default), the production pool already accepts `http://localhost:3000/auth/callback` and `http://localhost:3000/`. Put the `terraform output vercel_env` values (with `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`) in `frontend/.env.local`, and `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID` (same values) in the API's `.env`, with `DEV_AUTH_BYPASS=false`. You sign in as a real production user, against your local database. For a separate dev pool, apply this Terraform configuration into another account or with another `project` name and state key.
 
 Other notes:
