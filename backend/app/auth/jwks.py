@@ -1,12 +1,17 @@
-"""Supabase JWKS fetch + cache and asymmetric JWT verification (spec §9.3).
+"""AWS Cognito JWKS fetch + cache and access-token verification (spec §9.3).
 
-- JWKS is fetched from ``{SUPABASE_URL}/auth/v1/.well-known/jwks.json`` and cached for 1 hour.
-- Tokens are verified locally with ES256 (or RS256), audience ``"authenticated"``.
+- Issuer: ``https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}``.
+- JWKS is fetched from ``{issuer}/.well-known/jwks.json`` and cached for 1 hour.
+- Only RS256 is accepted (Cognito signs every token with RS256).
+- Only **access tokens** are accepted: ``token_use == "access"``, ``client_id`` equal to
+  ``COGNITO_APP_CLIENT_ID``, ``iss`` equal to the pool issuer, unexpired, with a ``sub``. ID tokens
+  (``token_use == "id"``) and tokens minted for other app clients are rejected. Cognito access tokens
+  carry no ``aud`` claim, so audience is checked through ``client_id`` instead.
 - A ``kid`` not present in the cached JWKS triggers exactly ONE forced refresh; if the key is still
   missing the token is rejected.
 
-Tests inject the HTTP client / URL / clock through :class:`JWKSClient` and install it with
-:func:`set_jwks_client`.
+Tests inject the HTTP client / issuer / client id / clock through :class:`JWKSClient` and install it
+with :func:`set_jwks_client`.
 """
 
 import asyncio
@@ -21,8 +26,7 @@ from jose.exceptions import ExpiredSignatureError, JWTClaimsError, JWTError
 from app.config import settings
 
 JWKS_TTL_SECONDS = 3600
-ALLOWED_ALGORITHMS = ["ES256", "RS256"]
-AUDIENCE = "authenticated"
+ALLOWED_ALGORITHMS = ["RS256"]
 
 
 class AuthError(Exception):
@@ -33,21 +37,28 @@ class JWKSUnavailableError(AuthError):
     """The signing keys could not be fetched (maps to HTTP 503: not the caller's fault)."""
 
 
-def default_jwks_url() -> str:
-    return f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
+def cognito_issuer(region: str, user_pool_id: str) -> str:
+    return f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
+
+
+def default_issuer() -> str:
+    return cognito_issuer(settings.COGNITO_REGION, settings.COGNITO_USER_POOL_ID)
 
 
 class JWKSClient:
     def __init__(
         self,
-        jwks_url: str | None = None,
+        issuer: str | None = None,
+        client_id: str | None = None,
         *,
         http_client: httpx.AsyncClient | None = None,
         ttl_seconds: float = JWKS_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
         timeout: float = 5.0,
     ) -> None:
-        self.jwks_url = jwks_url or default_jwks_url()
+        self.issuer = (issuer or default_issuer()).rstrip("/")
+        self.client_id = client_id if client_id is not None else settings.COGNITO_APP_CLIENT_ID
+        self.jwks_url = f"{self.issuer}/.well-known/jwks.json"
         self._http = http_client
         self._ttl = ttl_seconds
         self._clock = clock
@@ -96,7 +107,9 @@ class JWKSClient:
         return next((k for k in jwks["keys"] if isinstance(k, dict) and k.get("kid") == kid), None)
 
     async def verify(self, token: str) -> dict[str, Any]:
-        """Verify ``token`` and return its claims. Raises :class:`AuthError` on any failure."""
+        """Verify a Cognito access token and return its claims. Raises :class:`AuthError` on any failure."""
+        if not self.client_id:
+            raise AuthError("auth is not configured (COGNITO_APP_CLIENT_ID is empty)")
         try:
             header = jwt.get_unverified_header(token)
         except JWTError as exc:
@@ -115,13 +128,24 @@ class JWKSClient:
                 raise AuthError("unknown signing key")
 
         try:
-            claims = jwt.decode(token, key, algorithms=ALLOWED_ALGORITHMS, audience=AUDIENCE)
+            claims = jwt.decode(
+                token,
+                key,
+                algorithms=ALLOWED_ALGORITHMS,
+                issuer=self.issuer,
+                # Access tokens have no "aud"; the app client is checked via client_id below.
+                options={"verify_aud": False, "require_exp": True, "require_iss": True},
+            )
         except ExpiredSignatureError as exc:
             raise AuthError("token expired") from exc
         except JWTClaimsError as exc:
             raise AuthError(f"invalid claims: {exc}") from exc
         except JWTError as exc:
             raise AuthError("invalid token") from exc
+        if claims.get("token_use") != "access":
+            raise AuthError("not an access token")
+        if claims.get("client_id") != self.client_id:
+            raise AuthError("token was issued to another client")
         if not claims.get("sub"):
             raise AuthError("token has no subject")
         return claims
@@ -143,7 +167,7 @@ def set_jwks_client(client: JWKSClient | None) -> None:
     _client = client
 
 
-async def verify_supabase_jwt(token: str) -> dict[str, Any]:
-    """Verify a Supabase access token with the process-wide JWKS client; returns its claims.
-    ``claims["sub"]`` is the Supabase user id (= ``runs.user_id``)."""
+async def verify_access_token(token: str) -> dict[str, Any]:
+    """Verify a Cognito access token with the process-wide JWKS client; returns its claims.
+    ``claims["sub"]`` is the Cognito user id (= ``users.id`` = ``runs.user_id``)."""
     return await get_jwks_client().verify(token)

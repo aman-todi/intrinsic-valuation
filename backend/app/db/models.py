@@ -1,8 +1,8 @@
 """ORM models mirroring the §3 DDL.
 
-The schema itself is owned by the Alembic migration ``0001_init`` (enums, indexes, RLS, the
-``updated_at`` trigger, the ``auth.users`` FK). These models only describe the columns so the app
-can query them; they are never used to ``create_all``.
+The schema itself is owned by the Alembic migration ``0001_init`` (enums, indexes, the
+``updated_at`` trigger). These models only describe the columns so the app can query them; they are
+never used to ``create_all``.
 """
 
 from datetime import datetime
@@ -60,6 +60,19 @@ TIMESTAMPTZ = DateTime(timezone=True)
 ONE_ACTIVE_RUN_INDEX = "runs_one_active_per_user"
 
 
+class User(Base):
+    """A Cognito user that has called the API (``id`` = Cognito ``sub``); upserted by ``app.deps``."""
+
+    __tablename__ = "users"
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    email: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=False, server_default=func.now())
+    last_seen_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
+
+    __mapper_args__ = {"eager_defaults": True}
+
+
 class Run(Base):
     __tablename__ = "runs"
     __table_args__ = (
@@ -76,8 +89,9 @@ class Run(Base):
     id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    # FK to auth.users(id) ON DELETE CASCADE lives in the migration only.
-    user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     ticker: Mapped[str] = mapped_column(Text, nullable=False)
     mode: Mapped[RunMode] = mapped_column(run_mode_enum, nullable=False, server_default=text("'auto'"))
     status: Mapped[RunStatus] = mapped_column(
@@ -195,6 +209,7 @@ class EdgarFilingCache(Base):
 
 
 ALL_TABLES: tuple[str, ...] = (
+    User.__tablename__,
     Run.__tablename__,
     RunEvent.__tablename__,
     CachedModel.__tablename__,

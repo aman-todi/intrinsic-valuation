@@ -53,6 +53,33 @@ async def test_401_without_valid_token(env):  # noqa: F811
     assert r.status_code == 401
 
 
+async def test_first_request_upserts_user_row_and_dev_bypass(env, monkeypatch):  # noqa: F811
+    """A Cognito user unknown to the DB gets a ``users`` row on first use (FK target of runs.user_id);
+    the dev bypass token works only with DEV_AUTH_BYPASS and upserts the fixed dev user."""
+    from sqlalchemy import text
+
+    from app.config import get_settings
+    from app.deps import DEV_BYPASS_TOKEN, DEV_USER_ID
+
+    async def users() -> dict:
+        async with env.sessionmaker() as s:
+            rows = await s.execute(text("SELECT id, email, last_seen_at FROM users"))
+            return {r.id: r for r in rows}
+
+    newcomer = uuid.uuid4()
+    r = await env.create_run(newcomer)
+    assert r.status_code < 300, r.text
+    row = (await users())[newcomer]
+    assert row.email is None and row.last_seen_at is not None
+
+    dev = {"Authorization": f"Bearer {DEV_BYPASS_TOKEN}"}
+    monkeypatch.setattr(get_settings(), "DEV_AUTH_BYPASS", False)
+    assert (await env.client.get("/api/runs/active", headers=dev)).status_code == 401
+    monkeypatch.setattr(get_settings(), "DEV_AUTH_BYPASS", True)
+    assert (await env.client.get("/api/runs/active", headers=dev)).status_code == 204
+    assert (await users())[DEV_USER_ID].email == "dev@localhost"
+
+
 async def test_404_on_another_users_run(env):  # noqa: F811
     owner, other = await env.make_user(), await env.make_user()
     run_id = await env.to_awaiting_confirm(owner)

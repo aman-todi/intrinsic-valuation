@@ -5,7 +5,7 @@ test.describe("run flow", () => {
   test("ticker → confirm (edited) → progress → result with downloads", async ({ page }) => {
     const { requests } = await installMockApi(page);
 
-    // Signed in via the dev auth bypass (no Supabase project configured for e2e).
+    // Signed in via the dev auth bypass (no Cognito app client configured for e2e).
     await page.goto("/");
     await expect(page.getByText("Dev auth bypass")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Value a US-listed company" })).toBeVisible();

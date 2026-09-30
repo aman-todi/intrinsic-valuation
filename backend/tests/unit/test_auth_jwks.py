@@ -1,4 +1,5 @@
-"""JWKS verification (spec §9.3) with a locally generated ES256 keypair and a respx-mocked JWKS."""
+"""Cognito access-token verification (spec §9.3) with a locally generated RSA keypair and a
+respx-mocked JWKS."""
 
 import base64
 import time
@@ -10,25 +11,30 @@ import httpx
 import pytest
 import respx
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from jose import jwt
 
+import app.deps as deps
 from app.auth.jwks import AuthError, JWKSClient, set_jwks_client
 from app.deps import AuthenticatedUser, current_user
 
-JWKS_URL = "https://test.supabase.local/auth/v1/.well-known/jwks.json"
+ISSUER = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TestPool"
+JWKS_URL = f"{ISSUER}/.well-known/jwks.json"
+CLIENT_ID = "test-app-client"
 
 
 def _b64(n: int) -> str:
-    return base64.urlsafe_b64encode(n.to_bytes(32, "big")).rstrip(b"=").decode()
+    return base64.urlsafe_b64encode(n.to_bytes((n.bit_length() + 7) // 8, "big")).rstrip(b"=").decode()
 
 
 class Signer:
+    """Mints Cognito-shaped RS256 access tokens."""
+
     def __init__(self, kid: str) -> None:
         self.kid = kid
-        self.private_key = ec.generate_private_key(ec.SECP256R1())
+        self.private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self.pem = self.private_key.private_bytes(
             serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
         ).decode()
@@ -37,12 +43,11 @@ class Signer:
     def jwk(self) -> dict[str, Any]:
         nums = self.private_key.public_key().public_numbers()
         return {
-            "kty": "EC",
-            "crv": "P-256",
-            "x": _b64(nums.x),
-            "y": _b64(nums.y),
+            "kty": "RSA",
+            "n": _b64(nums.n),
+            "e": _b64(nums.e),
             "kid": self.kid,
-            "alg": "ES256",
+            "alg": "RS256",
             "use": "sig",
         }
 
@@ -50,17 +55,22 @@ class Signer:
         now = int(time.time())
         claims = {
             "sub": str(uuid.UUID(int=42)),
-            "email": "a@example.com",
-            "aud": "authenticated",
-            "role": "authenticated",
+            "iss": ISSUER,
+            "client_id": CLIENT_ID,
+            "token_use": "access",
+            "scope": "openid email",
             "iat": now,
             "exp": now + 3600,
         }
-        claims.update(overrides)
-        return jwt.encode(claims, self.pem, algorithm="ES256", headers={"kid": self.kid})
+        for k, v in overrides.items():  # a None override removes the claim
+            if v is None:
+                claims.pop(k, None)
+            else:
+                claims[k] = v
+        return jwt.encode(claims, self.pem, algorithm="RS256", headers={"kid": self.kid})
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def signer() -> Signer:
     return Signer("kid-1")
 
@@ -73,15 +83,15 @@ async def http() -> AsyncIterator[httpx.AsyncClient]:
 
 @pytest.fixture
 def client(http: httpx.AsyncClient) -> JWKSClient:
-    return JWKSClient(JWKS_URL, http_client=http)
+    return JWKSClient(ISSUER, CLIENT_ID, http_client=http)
 
 
 @respx.mock
-async def test_valid_token(signer: Signer, client: JWKSClient) -> None:
+async def test_valid_access_token(signer: Signer, client: JWKSClient) -> None:
     route = respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json={"keys": [signer.jwk]}))
     claims = await client.verify(signer.token())
     assert claims["sub"] == str(uuid.UUID(int=42))
-    assert claims["email"] == "a@example.com"
+    assert claims["token_use"] == "access"
     # cached: a second verification does not refetch
     await client.verify(signer.token())
     assert route.call_count == 1
@@ -93,6 +103,25 @@ async def test_expired_token(signer: Signer, client: JWKSClient) -> None:
     now = int(time.time())
     with pytest.raises(AuthError, match="expired"):
         await client.verify(signer.token(iat=now - 7200, exp=now - 3600))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"client_id": "some-other-client"}, "another client"),
+        # an ID token: token_use "id", audience instead of client_id
+        ({"token_use": "id", "client_id": None, "aud": CLIENT_ID, "email": "a@example.com"}, "access token"),
+        ({"iss": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_Other"}, "invalid claims"),
+    ],
+    ids=["wrong-client", "id-token", "wrong-issuer"],
+)
+@respx.mock
+async def test_rejected_claims(
+    signer: Signer, client: JWKSClient, overrides: dict[str, Any], match: str
+) -> None:
+    respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json={"keys": [signer.jwk]}))
+    with pytest.raises(AuthError, match=match):
+        await client.verify(signer.token(**overrides))
 
 
 @respx.mock
@@ -111,31 +140,42 @@ async def test_unknown_kid_triggers_exactly_one_refresh(signer: Signer, client: 
 
 
 @pytest.fixture
-def app_client(signer: Signer) -> TestClient:
+def app_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, list[AuthenticatedUser]]:
+    touched: list[AuthenticatedUser] = []
+
+    async def fake_touch(user: AuthenticatedUser) -> None:
+        touched.append(user)
+
+    monkeypatch.setattr(deps, "touch_user", fake_touch)
     app = FastAPI()
 
     @app.get("/me")
     async def me(user: AuthenticatedUser = Depends(current_user)) -> dict[str, str | None]:
         return {"id": str(user.id), "email": user.email}
 
-    return TestClient(app)
+    return TestClient(app), touched
 
 
 @pytest.fixture
 def installed_client(signer: Signer):
     with respx.mock(assert_all_called=False) as mock:
         mock.get(JWKS_URL).mock(return_value=httpx.Response(200, json={"keys": [signer.jwk]}))
-        set_jwks_client(JWKSClient(JWKS_URL))
+        set_jwks_client(JWKSClient(ISSUER, CLIENT_ID))
         yield
         set_jwks_client(None)
 
 
-def test_current_user_401s(app_client: TestClient, signer: Signer, installed_client) -> None:
-    assert app_client.get("/me").status_code == 401
-    r = app_client.get("/me", headers={"Authorization": "Bearer garbage"})
+def test_current_user(app_client, signer: Signer, installed_client) -> None:
+    tc, touched = app_client
+    assert tc.get("/me").status_code == 401
+    r = tc.get("/me", headers={"Authorization": "Bearer garbage"})
     assert r.status_code == 401
     assert r.headers["www-authenticate"] == "Bearer"
-    r = app_client.get("/me", headers={"Authorization": f"Bearer {signer.token(aud='anon')}"})
+    r = tc.get("/me", headers={"Authorization": f"Bearer {signer.token(sub='not-a-uuid')}"})
     assert r.status_code == 401
-    r = app_client.get("/me", headers={"Authorization": f"Bearer {signer.token(sub='not-a-uuid')}"})
-    assert r.status_code == 401
+    assert touched == []
+
+    r = tc.get("/me", headers={"Authorization": f"Bearer {signer.token()}"})
+    assert r.status_code == 200
+    assert r.json() == {"id": str(uuid.UUID(int=42)), "email": None}
+    assert [u.id for u in touched] == [uuid.UUID(int=42)]  # users row upserted

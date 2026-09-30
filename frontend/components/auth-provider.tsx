@@ -4,12 +4,13 @@ import { usePathname, useRouter } from "next/navigation";
 import * as React from "react";
 import { Spinner } from "@/components/ui/spinner";
 import {
+  CALLBACK_PATH,
   getCurrentUser,
   isDevAuthBypass,
   onAuthChange,
-  signOut as supabaseSignOut,
+  signOut as authSignOut,
   type AuthUser,
-} from "@/lib/supabase-client";
+} from "@/lib/auth";
 
 interface AuthContextValue {
   /** undefined while the session is loading, null when signed out. */
@@ -28,11 +29,11 @@ export function useAuth(): AuthContextValue {
   return React.useContext(AuthContext);
 }
 
-const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PATHS = ["/login", CALLBACK_PATH];
 
 /**
- * Loads the Supabase session and redirects to /login when signed out (see AuthGate).
- * With the dev auth bypass (no NEXT_PUBLIC_SUPABASE_URL) the user is always signed in.
+ * Loads the Cognito session (lib/auth.ts) and redirects to /login when signed out (see AuthGate).
+ * With the dev auth bypass (no NEXT_PUBLIC_COGNITO_CLIENT_ID) the user is always signed in.
  */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = React.useState<AuthUser | null | undefined>(undefined);
@@ -63,7 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       devBypass: isDevAuthBypass,
       signOut: async () => {
-        await supabaseSignOut();
+        await authSignOut();
         setUser(isDevAuthBypass ? user : null);
       },
     }),

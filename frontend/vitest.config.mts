@@ -14,7 +14,7 @@ export default defineConfig({
     include: ["tests/unit/**/*.test.{ts,tsx}"],
     env: {
       NEXT_PUBLIC_API_BASE_URL: "http://api.test",
-      NEXT_PUBLIC_SUPABASE_URL: "",
+      NEXT_PUBLIC_COGNITO_CLIENT_ID: "",
     },
   },
 });

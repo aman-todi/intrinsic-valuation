@@ -1,1 +1,1 @@
-"""Supabase JWT auth."""
+"""Cognito JWT auth."""
