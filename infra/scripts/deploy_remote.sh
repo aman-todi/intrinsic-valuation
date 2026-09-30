@@ -88,12 +88,25 @@ for name, value in json.load(open(params_file, encoding="utf-8")):
         secrets[key] = value
 env = {**secrets, **config, "IMAGE_TAG": tag}
 
+# Terraform-owned: DATABASE_URL (SecureString), COGNITO_*, APP_DOMAIN, ... (config/*).
+# Owner-supplied (put_ssm_params.sh): ANTHROPIC_API_KEY, FRED_API_KEY, SEC_EDGAR_USER_AGENT.
 required = [
-    "SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "DATABASE_URL",
-    "DATABASE_POOLER_URL", "ANTHROPIC_API_KEY", "FRED_API_KEY", "SEC_EDGAR_USER_AGENT",
+    "DATABASE_URL", "COGNITO_REGION", "COGNITO_USER_POOL_ID", "COGNITO_APP_CLIENT_ID",
+    "ANTHROPIC_API_KEY", "FRED_API_KEY", "SEC_EDGAR_USER_AGENT",
     "APP_DOMAIN", "PUBLIC_API_BASE_URL", "ACME_EMAIL", "AWS_REGION", "S3_BUCKET_NAME", "ECR_REGISTRY",
 ]
+# Pre-RDS/Cognito leftovers: not rendered (put_ssm_params.sh --delete-legacy removes them from SSM).
+legacy = ["SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "DATABASE_POOLER_URL"]
+stale = [k for k in legacy if k in env]
+for k in stale:
+    del env[k]
+if stale:
+    print(f"WARNING: ignoring legacy SSM parameters {', '.join(stale)} "
+          "(delete them: infra/scripts/put_ssm_params.sh --delete-legacy)", file=sys.stderr)
 missing = [k for k in required if not env.get(k)]
+if env.get("DATABASE_URL") and not env["DATABASE_URL"].startswith("postgresql+psycopg://"):
+    print("DATABASE_URL must start with postgresql+psycopg:// (it is written by Terraform)", file=sys.stderr)
+    missing.append("DATABASE_URL (malformed)")
 bad = [k for k, v in env.items() if "'" in v or "\n" in v]
 if missing:
     print(f"missing SSM parameters under {prefix}/: {', '.join(missing)} "
@@ -103,7 +116,7 @@ if bad:
 if missing or bad:
     sys.exit(1)
 if not env.get("CORS_ORIGINS"):
-    print("WARNING: CORS_ORIGINS is empty - browsers cannot call the API until cors_origins is set "
+    print("WARNING: CORS_ORIGINS is empty - browsers cannot call the API until frontend_origins is set "
           "in terraform.tfvars (then terraform apply + redeploy)", file=sys.stderr)
 for k in sorted(env):
     print(f"{k}='{env[k]}'")

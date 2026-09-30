@@ -1,10 +1,14 @@
 # DCF valuation app, production: one Graviton EC2 instance running docker compose (caddy, api, worker,
-# redis) behind an Elastic IP. The frontend is on Vercel; Postgres + Auth are Supabase; artifacts are in
-# S3; images in ECR. Secrets live in SSM Parameter Store and are written out-of-band by
-# infra/scripts/put_ssm_params.sh, so they never enter Terraform state. See docs/DEPLOYMENT.md.
+# redis) behind an Elastic IP, a private RDS PostgreSQL instance, and a Cognito user pool with managed
+# login. The frontend is on Vercel; artifacts are in S3; images in ECR. Runtime config lives in SSM
+# Parameter Store: Terraform writes the non-secret config/* values and the DATABASE_URL SecureString
+# (its password is therefore in Terraform state, which is why the state bucket is private + encrypted);
+# the owner's third-party API keys are written out-of-band by infra/scripts/put_ssm_params.sh and never
+# enter state. See docs/DEPLOYMENT.md.
 #
-# Files: network.tf (SG, EIP), compute.tf (instance, alarms), storage.tf (S3, ECR), iam.tf (instance
-# role, GitHub OIDC deploy role), ssm.tf (non-secret runtime config), budget.tf, outputs.tf.
+# Files: network.tf (SG, EIP), compute.tf (instance, alarms), database.tf (RDS, DB SG, DATABASE_URL),
+# auth.tf (Cognito), storage.tf (S3, ECR), iam.tf (instance role, GitHub OIDC deploy role), ssm.tf
+# (non-secret runtime config), budget.tf, outputs.tf.
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}

@@ -4,6 +4,8 @@
 #
 #   internet :80/:443 --> caddy (auto HTTPS) --> api:8000 (uvicorn)
 #                                               worker (SAQ) --> redis:6379 <-- api
+#   api + worker --> RDS PostgreSQL (DATABASE_URL, TLS, private; Alembic runs in a one-off api container)
+#   api --> Cognito JWKS (validates access tokens: COGNITO_REGION / _USER_POOL_ID / _APP_CLIENT_ID)
 #
 # /opt/dcf/.env is rendered from SSM Parameter Store on each deploy (0600). It is both the containers'
 # env_file (api/worker) and the source for ${...} interpolation below (IMAGE_TAG, ECR_REGISTRY, ...).

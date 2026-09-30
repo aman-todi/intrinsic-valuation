@@ -1,6 +1,6 @@
 # ---------- general ----------
 variable "aws_region" {
-  description = "AWS region. Keep it close to the Supabase project's region."
+  description = "AWS region for everything (EC2, RDS, Cognito, S3, ECR, SSM)."
   type        = string
   default     = "us-east-1"
 }
@@ -77,14 +77,14 @@ variable "acme_email" {
   default     = ""
 }
 
-variable "cors_origins" {
-  description = "Browser origins allowed to call the API: the Vercel production URL (and any stable preview/custom domains), exact origins with no trailing slash. Wildcards are not supported."
+variable "frontend_origins" {
+  description = "The frontend's browser origins (Vercel production URL, stable preview aliases, custom domain): exact scheme://host[:port], no path or trailing slash, no wildcards. Single source of truth for the API's CORS_ORIGINS and the Cognito app client's callback (<origin>/auth/callback) and sign-out (<origin>/) URLs. Cognito requires https except for localhost."
   type        = list(string)
   default     = []
 
   validation {
-    condition     = alltrue([for o in var.cors_origins : can(regex("^https?://[^/*]+$", o))])
-    error_message = "Each CORS origin must be scheme://host[:port] with no path, trailing slash or wildcard."
+    condition     = alltrue([for o in var.frontend_origins : can(regex("^(https://[^/*]+|http://localhost(:[0-9]+)?)$", o))])
+    error_message = "Each frontend origin must be https://host[:port] (or http://localhost[:port]) with no path, trailing slash or wildcard."
   }
 }
 
@@ -92,6 +92,97 @@ variable "worker_concurrency" {
   description = "SAQ jobs per worker process. Each build can run LibreOffice (~300 MB), so keep 2 on t4g.small; 4 on t4g.medium."
   type        = number
   default     = 2
+}
+
+# ---------- auth (Cognito) ----------
+variable "cognito_allow_self_signup" {
+  description = "false (default) = invite-only: users are created with admin-create-user. true = anyone can sign up on the managed login page."
+  type        = bool
+  default     = false
+}
+
+variable "cognito_email_otp_enabled" {
+  description = "Offer passwordless email one-time codes as a first sign-in factor next to the password (choice-based sign-in, Essentials tier). Each OTP sign-in sends an email, which counts toward the 50 emails/day limit of the default Cognito sender."
+  type        = bool
+  default     = true
+}
+
+variable "cognito_localhost_callbacks" {
+  description = "Also allow http://localhost:3000/auth/callback and http://localhost:3000/ on the app client, so a local frontend can sign in against the production pool."
+  type        = bool
+  default     = true
+}
+
+variable "cognito_domain_prefix" {
+  description = "Managed login domain prefix (<prefix>.auth.<region>.amazoncognito.com); lowercase letters, digits and hyphens, and must not contain aws, amazon or cognito. Empty = <project>-<random hex>. Changing it replaces the domain (update NEXT_PUBLIC_COGNITO_DOMAIN)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.cognito_domain_prefix == "" || can(regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", var.cognito_domain_prefix))
+    error_message = "cognito_domain_prefix must be lowercase letters, digits and hyphens (1-63 chars, no leading/trailing hyphen)."
+  }
+}
+
+variable "cognito_deletion_protection" {
+  description = "Block deleting the user pool (set false and apply before a teardown)."
+  type        = bool
+  default     = true
+}
+
+# ---------- database (RDS PostgreSQL) ----------
+variable "db_engine_version" {
+  description = "RDS PostgreSQL version. A major version (\"17\") picks the region's default minor and lets auto minor upgrades move it; a full version (\"17.6\") pins it. Major upgrades are manual (docs/DEPLOYMENT.md)."
+  type        = string
+  default     = "17"
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class. db.t4g.micro (2 vCPU burstable, 1 GB) is enough for v1; db.t4g.small (2 GB) is the upgrade path."
+  type        = string
+  default     = "db.t4g.micro"
+}
+
+variable "db_allocated_storage_gb" {
+  description = "Initial gp3 storage (GiB); 20 is the RDS minimum."
+  type        = number
+  default     = 20
+}
+
+variable "db_max_allocated_storage_gb" {
+  description = "Storage autoscaling ceiling (GiB). Storage can grow but never shrink."
+  type        = number
+  default     = 50
+}
+
+variable "db_name" {
+  description = "Database created in the instance."
+  type        = string
+  default     = "dcf"
+}
+
+variable "db_username" {
+  description = "Master user; v1's app connects as this user."
+  type        = string
+  default     = "dcf_app"
+}
+
+variable "db_backup_retention_days" {
+  description = "Automated backup (point-in-time restore) retention in days, 1-35."
+  type        = number
+  default     = 7
+}
+
+variable "db_availability_zone" {
+  description = "AZ for the DB instance. Empty = the app instance's AZ (no cross-AZ traffic). Only read at creation."
+  type        = string
+  default     = ""
+}
+
+variable "db_deletion_protection" {
+  description = "Block deleting the DB instance (set false and apply before a teardown). A final snapshot is taken on delete regardless."
+  type        = bool
+  default     = true
 }
 
 # ---------- storage / registry ----------
@@ -151,5 +242,5 @@ variable "alert_email" {
 variable "monthly_budget_usd" {
   description = "Monthly AWS cost budget. Alerts at 80% and 100% of actual spend and 100% of forecast."
   type        = number
-  default     = 30
+  default     = 45
 }
