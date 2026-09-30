@@ -1,7 +1,7 @@
 # DCF Valuation Platform — Build Specification
 
 **Audience:** Claude Code (autonomous implementation), orchestrated as multiple parallel sessions from one parent session.
-**Status:** Ready to build. Cloud resource *values* (AWS keys, Supabase project, Anthropic key, FRED key) are not yet provisioned — everything reads from environment variables, and `.env.example` documents every one. Runbooks at the end tell a human exactly how to provision each one.
+**Status:** Ready to build. Cloud resource *values* (AWS account, Anthropic key, FRED key) are not yet provisioned — everything reads from environment variables, and `.env.example` documents every one. Runbooks at the end tell a human exactly how to provision each one.
 **Owner / primary user:** Aman (+ ~10 friends/family). Small, trusted user base — the app enforces one-run-per-user, not multi-tenant scale.
 
 ---
@@ -32,7 +32,7 @@ Given a US-listed ticker, the app determines the *right* valuation model for tha
    - **Damodaran datasets** (static `.xls`/`.xlsx` files, no key) — industry betas, ERP, margin/growth benchmarks. Refreshed manually a few times a year, cached in S3.
    - **No paid market-data API, no cross-check provider, no analyst consensus** — explicitly deferred.
 9. **AI's job is proposing assumptions + writing narrative text — never arithmetic.** The valuation engine is pure, deterministic, unit-tested Python. Claude structured outputs (Pydantic schema, all-required flat fields — see §5.3 for why) return assumption values + one-line rationale + source per field.
-10. **Stack:** FastAPI (Python 3.13) + SAQ/Redis job queue + Postgres via Supabase (session pooler) + S3 (already on free tier) + Next.js 16 frontend on **Vercel**. The backend (API, worker, Redis, Caddy for TLS) runs as a **docker compose stack on a single EC2 instance**, provisioned with **Terraform** — sized for tens of users, not horizontal scale. No LangGraph — the pipeline is a plain state machine; a bounded propose→validate→repair loop handles the one place (assumption proposal) that benefits from an agentic pattern, using the Anthropic SDK directly.
+10. **Stack:** FastAPI (Python 3.13) + SAQ/Redis job queue + Postgres on **AWS RDS** + **AWS Cognito** auth + S3 (already on free tier) + Next.js 16 frontend on **Vercel**. The backend (API, worker, Redis, Caddy for TLS) runs as a **docker compose stack on a single EC2 instance**, provisioned with **Terraform** — sized for tens of users, not horizontal scale. No LangGraph — the pipeline is a plain state machine; a bounded propose→validate→repair loop handles the one place (assumption proposal) that benefits from an agentic pattern, using the Anthropic SDK directly.
 
 Everything below implements this. Section 12 breaks the build into 15 tickets designed to run in parallel.
 ## 1. Tech stack & pinned versions
@@ -45,7 +45,7 @@ Researched against current state as of **September 2026**. Pin exactly; do not f
 | Web framework | FastAPI | **>=0.128,<0.140** | Pydantic v2 only; drop any v1 compat code. |
 | Validation | Pydantic | **>=2.10,<3.0** | |
 | ORM | SQLAlchemy | **>=2.0.35,<2.1** | Async engine. |
-| DB driver | **psycopg** (v3), `psycopg[binary,pool]` | **>=3.2,<4.0** | See §9.2 — avoids the `asyncpg` + Supabase-pooler prepared-statement failure mode entirely when run against the *session* pooler. |
+| DB driver | **psycopg** (v3), `psycopg[binary,pool]` | **>=3.2,<4.0** | See §9.2 — async-native, robust prepared-statement handling, and the same driver for the app and Alembic. |
 | Migrations | Alembic | **>=1.14,<2.0** | Runs against the **direct** (non-pooled) connection string only. |
 | Job queue | **SAQ** (`saq[redis]`) | **>=0.26,<0.27** | **Arq is in maintenance-only mode as of 2026 — do not use it.** SAQ is its actively-maintained, faster, async-native successor; supports Redis, has a heartbeat/stuck-job sweeper, and ships a web monitor. |
 | Queue backend | Redis | **7.x** (`redis:7-alpine` image) | Also used for the SEC token-bucket limiter, single-flight build locks, and cancel pub/sub. |
@@ -69,8 +69,8 @@ Researched against current state as of **September 2026**. Pin exactly; do not f
 | Data fetching | TanStack Query | **v5** | Polling + mutation for run lifecycle. |
 | Charts (frontend) | Recharts | **v3** | Sensitivity grid, scenario bars. |
 | Frontend tests | Vitest + React Testing Library, Playwright (e2e) | latest | |
-| Auth | Supabase Auth | — | **New JWT signing keys (asymmetric, JWKS)**, not the legacy shared `JWT_SECRET`. Verify locally via cached JWKS — no per-request round trip to Supabase. |
-| DB hosting | Supabase Postgres | — | Session pooler (port 5432 via pooler host) for the app; direct connection for Alembic. |
+| Auth | **AWS Cognito** user pool (Essentials tier, managed login) | — | Authorization Code + PKCE from the browser (`oidc-client-ts`); the API verifies Cognito **access tokens** locally against the pool's cached JWKS (RS256) — no per-request round trip. |
+| DB hosting | **AWS RDS for PostgreSQL** | 17.x, `db.t4g.micro` | Single-AZ, private (reachable only from the app host), TLS required, 7-day automated backups. One `DATABASE_URL` for the app and Alembic. |
 | Object storage | AWS S3 | — | Already on your free tier. |
 | Backend hosting | **One AWS EC2 instance** (Graviton `t4g.small`, arm64, Amazon Linux 2023) running **docker compose** | Compose v2 plugin | Services: `caddy`, `api`, `worker`, `redis`. See §11. |
 | Reverse proxy / TLS | **Caddy** | **2.11** | Automatic Let's Encrypt certificates; SSE-safe proxying. |
@@ -125,7 +125,7 @@ dcf-app/
 │   │   │   ├── base.py                    # SQLAlchemy async engine/session
 │   │   │   └── models.py                  # ORM models mirroring §6 DDL
 │   │   ├── auth/
-│   │   │   ├── jwks.py                    # Supabase JWKS fetch + cache
+│   │   │   ├── jwks.py                    # Cognito JWKS fetch + cache, access-token verification
 │   │   │   └── middleware.py
 │   │   ├── schemas/                       # Pydantic contracts, shared with jobs
 │   │   │   ├── company.py
@@ -203,15 +203,15 @@ dcf-app/
     │   └── active-run-guard.tsx           # blocks new submissions while a run is active
     ├── lib/
     │   ├── api-client.ts
-    │   ├── supabase-client.ts
+    │   ├── auth.ts                         # oidc-client-ts UserManager (Cognito)
     │   └── run-status.ts
     └── tests/
         ├── unit/
         └── e2e/
 ```
-## 3. Database schema (Supabase Postgres)
+## 3. Database schema (PostgreSQL on RDS)
 
-All tables live in the `public` schema and reference `auth.users(id)` for the user FK (Supabase's built-in auth table — we never create our own users table). Row Level Security (RLS) is **on** for every table; the service role (used by the backend) bypasses RLS, the anon/authenticated role (unused directly — the frontend never talks to Postgres, only to our API) would be scoped by these policies if ever needed.
+All tables live in the `public` schema. Identity lives in Cognito; the `users` table mirrors each Cognito user (`id` = the token's `sub`) and is upserted by the API on a user's first authenticated request, so nothing needs to be pre-created in the database. The API is the **only** database client (the browser never talks to Postgres), so authorization is enforced in the API layer and no row-level-security policies are defined.
 
 ```sql
 -- migration 0001_init.sql  (managed by Alembic; shown here as the target schema)
@@ -233,9 +233,19 @@ create type run_status as enum (
 
 create type run_mode as enum ('auto', 'custom');
 
+-- ============================================================
+-- users: mirror of Cognito users (id = access-token sub)
+-- ============================================================
+create table users (
+  id            uuid primary key,
+  email         text,
+  created_at    timestamptz not null default now(),
+  last_seen_at  timestamptz
+);
+
 create table runs (
   id                   uuid primary key default gen_random_uuid(),
-  user_id              uuid not null references auth.users(id) on delete cascade,
+  user_id              uuid not null references users(id) on delete cascade,
   ticker               text not null,
   mode                 run_mode not null default 'auto',
   status               run_status not null default 'classifying',
@@ -344,26 +354,10 @@ create table edgar_filing_cache (
   fetched_at        timestamptz not null default now()
 );
 
--- RLS
-alter table runs enable row level security;
-alter table run_events enable row level security;
-alter table cached_models enable row level security;
-alter table cached_proposals enable row level security;
-alter table edgar_filing_cache enable row level security;
-
-create policy runs_owner_select on runs for select using (auth.uid() = user_id);
-create policy runs_owner_all on runs for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
-create policy run_events_owner_select on run_events for select using (
-  exists (select 1 from runs r where r.id = run_events.run_id and r.user_id = auth.uid())
-);
--- cached_models / cached_proposals / edgar_filing_cache: shared read-only for any authenticated user,
--- writes only via service role (the backend), so no `for all` policy is created for them.
-create policy cached_models_read on cached_models for select using (auth.role() = 'authenticated');
-create policy cached_proposals_read on cached_proposals for select using (auth.role() = 'authenticated');
 ```
 
 **Notes for the implementing ticket:**
-- The backend connects with the Supabase **service role** key for all writes (bypasses RLS by design — our API layer is the actual authorization boundary, checking `run.user_id == current_user.id` in Python before ever touching a row). RLS here is defense-in-depth in case anything ever queries Postgres directly (e.g., a future Supabase client-side read).
+- The API layer is the authorization boundary: it checks `run.user_id == current_user.id` in Python before touching a row (§9.3). The database is private to the app host (§11.3).
 - `runs_one_active_per_user` is what makes "one run at a time" a hard guarantee rather than a UI convention. Catch the resulting `UniqueViolation` in the run-creation endpoint and return a `409` with the existing active run's id so the frontend can redirect to it.
 - Store `ValuationResult` redundantly in `cached_models.valuation_result` (not just S3) so the API can serve a cache hit without an S3 round trip.
 ## 4. Core domain schemas (Pydantic)
@@ -1292,75 +1286,64 @@ Reconnect-safe: the frontend passes `Last-Event-ID` or simply re-requests from `
 | `GET /api/runs/{id}/result` | Once `COMPLETE`: the `ValuationResult` JSON + presigned S3 URLs for the `.xlsx` and `.pdf`, plus a **fresh** live price fetched at read time (not the cached one) so the UI can show current upside next to the cached fair value (§ pricing decision). |
 | `GET /api/health` | Liveness/readiness for the compose healthcheck and deploy verification. No auth. |
 
-### 9.2 Database connectivity (Supabase)
+### 9.2 Database connectivity (RDS)
 
-Two distinct connection strings, both env vars:
-
-- `DATABASE_URL` — the **direct** (non-pooled, port 5432, direct host) connection, used **only by Alembic** for migrations (DDL needs session-level state pgbouncer-style poolers don't reliably give you).
-- `DATABASE_POOLER_URL` — the Supabase **Session Pooler** connection (still port 5432, but through the pooler hostname) used by the running app (`api` and `worker`). Session mode behaves like a normal persistent connection — including full support for prepared statements — so **no `statement_cache_size=0` workaround is needed here**; that workaround is only required for the *transaction*-mode pooler (port 6543), which this app deliberately does not use since it isn't running as ephemeral serverless functions.
+One connection string, `DATABASE_URL` (`postgresql+psycopg://…@<rds-endpoint>:5432/dcf?sslmode=require`), used by the `api` and `worker` services and by Alembic. RDS enforces TLS (`rds.force_ssl = 1`). In production Terraform generates the credentials and writes the URL to SSM (§11.3).
 
 ```python
 # backend/app/db/base.py
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 engine = create_async_engine(
-    settings.DATABASE_POOLER_URL,   # postgresql+psycopg://...
-    pool_size=10,
-    max_overflow=20,
+    settings.DATABASE_URL,          # postgresql+psycopg://...
+    pool_size=5,
+    max_overflow=5,
     pool_recycle=300,
     pool_pre_ping=True,
 )
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 ```
 
-Driver: **psycopg (v3)**, async mode, via the `postgresql+psycopg://` SQLAlchemy dialect — chosen specifically to sidestep the whole class of `asyncpg` + PgBouncer-family prepared-statement bugs that come up repeatedly with Supabase's poolers, even though Session Pooler in principle avoids them; psycopg3 is the more forgiving choice if Supabase ever migrates connection behavior under us.
+Connection budget: ≤ 10 connections per process × (2 uvicorn workers + 1 SAQ worker) ≤ 30, well inside `db.t4g.micro`'s limit.
 
-### 9.3 Auth (Supabase JWT, asymmetric/JWKS)
+Driver: **psycopg (v3)**, async mode, via the `postgresql+psycopg://` SQLAlchemy dialect.
 
-Supabase's **new JWT signing keys** feature (ES256, asymmetric) lets us verify tokens locally without a round trip to Supabase's Auth server. Use this, not the legacy shared-secret HS256 path.
+### 9.3 Auth (AWS Cognito, access tokens verified via JWKS)
+
+A Cognito user pool (managed login, email + password or email one-time code, optional TOTP MFA; invite-only by default) issues RS256-signed tokens. The API verifies **access tokens** locally against the pool's JWKS, cached for an hour, with no round trip to Cognito per request.
 
 ```python
 # backend/app/auth/jwks.py
-import time, httpx
-from jose import jwt
-
-_cache = {"keys": None, "fetched_at": 0}
+ISSUER = f"https://cognito-idp.{settings.COGNITO_REGION}.amazonaws.com/{settings.COGNITO_USER_POOL_ID}"
+JWKS_URL = f"{ISSUER}/.well-known/jwks.json"
 JWKS_TTL_SECONDS = 3600
 
-async def get_jwks() -> dict:
-    if _cache["keys"] is None or time.time() - _cache["fetched_at"] > JWKS_TTL_SECONDS:
-        async with httpx.AsyncClient() as client:
-            r = await client.get(f"{settings.SUPABASE_URL}/auth/v1/.well-known/jwks.json")
-            r.raise_for_status()
-            _cache["keys"] = r.json()
-            _cache["fetched_at"] = time.time()
-    return _cache["keys"]
-
-async def verify_supabase_jwt(token: str) -> dict:
-    jwks = await get_jwks()
-    unverified_header = jwt.get_unverified_header(token)
-    key = next((k for k in jwks["keys"] if k["kid"] == unverified_header["kid"]), None)
-    if key is None:
-        # kid rotated since our cache was populated — refresh once and retry
-        jwks = await _force_refresh_jwks()
-        key = next((k for k in jwks["keys"] if k["kid"] == unverified_header["kid"]), None)
-        if key is None:
-            raise AuthError("unknown signing key")
-    claims = jwt.decode(token, key, algorithms=["ES256", "RS256"], audience="authenticated")
-    return claims   # claims["sub"] is the Supabase user id -> our runs.user_id
+async def verify_access_token(token: str) -> dict:
+    header = jwt.get_unverified_header(token)
+    key = await jwks.key_for(header["kid"])        # unknown kid -> exactly one forced refresh, then reject
+    claims = jwt.decode(token, key, algorithms=["RS256"], issuer=ISSUER,
+                        options={"verify_aud": False})   # access tokens carry client_id, not aud
+    if claims.get("token_use") != "access":
+        raise AuthError("not an access token")
+    if claims.get("client_id") != settings.COGNITO_APP_CLIENT_ID:
+        raise AuthError("token issued for another client")
+    return claims                                   # claims["sub"] (UUID) -> users.id / runs.user_id
 ```
 
 ```python
 # backend/app/deps.py
-async def current_user(authorization: str = Header(...)) -> AuthenticatedUser:
-    token = authorization.removeprefix("Bearer ").strip()
-    claims = await verify_supabase_jwt(token)
-    return AuthenticatedUser(id=claims["sub"], email=claims.get("email"))
+async def current_user(authorization: str = Header(...), db=Depends(get_db)) -> AuthenticatedUser:
+    claims = await verify_access_token(authorization.removeprefix("Bearer ").strip())
+    user = AuthenticatedUser(id=UUID(claims["sub"]))
+    await upsert_user(db, user.id)   # insert ... on conflict (id) do update set last_seen_at = now()
+    return user
 ```
 
-The **frontend** authenticates directly against Supabase Auth (email/password or magic link — either is fine for ~10 users; magic link avoids password-reset UX entirely and is the recommended default) using `@supabase/supabase-js`, and sends the resulting access token as `Authorization: Bearer <token>` on every API call. The backend never talks to Supabase Auth for login/signup — only for JWKS verification.
+Invalid, expired, ID-token, wrong-issuer or wrong-client tokens → `401`; JWKS unreachable → `503`. The SSE route also accepts the token as `?access_token=` because `EventSource` cannot send headers. A `DEV_AUTH_BYPASS` setting (off by default, local dev only) maps `Bearer dev-bypass-token` to a fixed dev user.
 
-**Authorization boundary**: every route handler that takes a `run_id` must load the run and check `run.user_id == current_user.id`, returning `404` (not `403`, to avoid confirming existence) on mismatch. This is the real access-control layer; Postgres RLS (§3) is defense-in-depth since the backend connects with the service-role key.
+The **frontend** authenticates against Cognito's managed login with the **Authorization Code + PKCE** flow (`oidc-client-ts`, public app client with no secret, scopes `openid email`, callback `<origin>/auth/callback`, sign-out via the Cognito `/logout` endpoint back to `<origin>/`). It stores tokens in `localStorage`, renews the access token with the refresh token shortly before expiry, and sends it as `Authorization: Bearer <access_token>` on every API call.
+
+**Authorization boundary**: every route handler that takes a `run_id` must load the run and check `run.user_id == current_user.id`, returning `404` (not `403`, to avoid confirming existence) on mismatch.
 ## 10. Frontend
 
 ### 10.1 Pages & flow
@@ -1410,7 +1393,7 @@ No per-model-type form component is ever written by hand — new model types (sh
 
 - **TanStack Query** for `GET /api/runs/{id}` (poll every 2s while status is `classifying`/`proposing`, stop polling once `awaiting_confirm`/`complete`/`failed`/`cancelled`).
 - **SSE** (native `EventSource`) drives the live progress log during `building`, layered on top of the same query cache — an `onmessage` handler calls `queryClient.setQueryData` so the rest of the UI stays in sync without a second poll loop.
-- **Supabase JS client** (`lib/supabase-client.ts`) only for auth (sign-in, session/token retrieval) — every other read/write goes through our own API, never directly to Supabase from the browser.
+- **`lib/auth.ts`** (`oidc-client-ts` against Cognito) only for sign-in, token storage/renewal and sign-out — every data read/write goes through our own API.
 
 ### 10.4 Sensitivity chart
 
@@ -1598,7 +1581,7 @@ The suite is deliberately lean: **≤ 200 tests in total** (backend + frontend, 
 - **Platform** (`test_auth_jwks.py`, `test_storage.py`, `test_state_machine.py`, `test_cancel.py`, `test_cache_key.py`, `test_schemas.py`, `test_demo_mode.py`, `test_worker_settings.py`): JWKS valid/expired/unknown-`kid` refreshes exactly once; storage signing and path safety; allowed state transitions; `run_cancellable`; cache-key sensitivity; assumption schemas are all-required.
 
 **Integration (`integration/`)** — real Postgres 16 and Redis (local throwaway instances or CI service containers via `TEST_DATABASE_URL`/`TEST_REDIS_URL`), real `soffice` and WeasyPrint, mocked external HTTP and a fake Anthropic client:
-- `test_db_migrations.py`: migrations apply and downgrade; RLS on every table; the `runs_one_active_per_user` index rejects a second active run.
+- `test_db_migrations.py`: migrations apply and downgrade; `users` FK cascades; the `runs_one_active_per_user` index rejects a second active run.
 - `test_run_lifecycle.py`: one `auto` AAPL run end to end (classify → propose → confirm → build → complete) with real Excel recalc verification and PDF, asserting DB rows, `run_events`, the result endpoint and downloadable files.
 - `test_one_active_run_lock.py`, `test_cache_hit_and_fork.py`, `test_single_flight_lock.py`: 409 lock (create and confirm); second user gets a cache hit with no new build work while an edited run forks privately; concurrent identical builds run the pipeline once (incl. a stale lock).
 - `test_cancel.py`, `test_stale_cancel.py`: cancel mid-build stops at a sentinel with nothing promoted; cancel during proposal, at `awaiting_confirm`, and on worker shutdown; a cancelled-but-never-picked-up run stops blocking new runs.
@@ -1695,11 +1678,11 @@ Every ticket should open its own PR/branch against `main`, include tests, and no
 ### Batch 1 — parallel, each depends only on Ticket 1
 
 **Ticket 2 — Database, migrations, auth**
-- Alembic setup; migration implementing the exact DDL in §3, including the `runs_one_active_per_user` partial unique index and all RLS policies.
+- Alembic setup; migration implementing the exact DDL in §3, including the `users` table and the `runs_one_active_per_user` partial unique index.
 - `backend/app/db/models.py` SQLAlchemy models mirroring the DDL.
-- `backend/app/db/base.py` async engine/session per §9.2 (psycopg3, session pooler).
-- `backend/app/auth/jwks.py` + `middleware.py`/`deps.py` per §9.3 (JWKS fetch/cache, ES256 verify, `kid`-miss refresh-once behavior, `current_user` dependency).
-- Tests: migration applies cleanly against a throwaway Postgres (CI service container); the unique index actually rejects a second active row via a raw `INSERT`; JWKS verification unit tests with a locally-generated ES256 test keypair (mock the JWKS HTTP call), covering valid token, expired token, wrong audience, unknown `kid` (triggers exactly one refresh).
+- `backend/app/db/base.py` async engine/session per §9.2 (psycopg3, single `DATABASE_URL`).
+- `backend/app/auth/jwks.py` + `middleware.py`/`deps.py` per §9.3 (Cognito JWKS fetch/cache, RS256 access-token verification incl. `token_use`/`client_id`, `kid`-miss refresh-once behavior, `current_user` dependency with the `users` upsert).
+- Tests: migration applies cleanly against a throwaway Postgres (CI service container); the unique index actually rejects a second active row via a raw `INSERT`; JWKS verification unit tests with a locally generated RSA keypair (mock the JWKS HTTP call), covering valid access token, expired token, wrong `client_id`, ID token rejected, unknown `kid` (triggers exactly one refresh).
 
 **Ticket 3 — EDGAR client & normalization**
 - `data/edgar/client.py`: rate-limited (Redis token bucket) `httpx` client per §5.1, `get_submissions`, `get_companyfacts`, ticker→CIK map, S3 raw-JSON caching + `edgar_filing_cache` indexing.
@@ -1752,7 +1735,7 @@ Every ticket should open its own PR/branch against `main`, include tests, and no
 **Ticket 13 — Frontend application**
 *Can build entirely against a mocked API (MSW or a small mock Express/JSON server implementing the contract in §9.1) — does not need the real backend to exist yet.*
 - All pages/components from §10: ticker entry + `ActiveRunGuard`, `/runs/[id]` with its four rendered states, `ModelConfirmCard`, schema-driven `AssumptionsForm`, `ProgressView` with SSE + Cancel, `ResultView` with `SensitivityChart` and download links.
-- Supabase auth wiring (`lib/supabase-client.ts`) for sign-in only.
+- Cognito auth wiring (`lib/auth.ts`, `/auth/callback`) for sign-in only.
 - Tests: the Vitest/RTL component tests and the Playwright `run-flow.spec.ts`/`single-run-lock.spec.ts` from §13.2, all against the mock API.
 - **Deliverable other tickets need:** nothing blocks on this except final integration (Ticket 15).
 
