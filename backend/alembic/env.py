@@ -1,7 +1,7 @@
 """Alembic environment (spec §9.2).
 
-Migrations run synchronously over psycopg3 (``postgresql+psycopg://``) against the DIRECT
-connection (``DATABASE_URL``), never the pooler.
+Migrations run synchronously over psycopg3 (``postgresql+psycopg://``) against ``DATABASE_URL`` —
+the same URL the app uses (``-x dburl=...`` or ``sqlalchemy.url`` override it, e.g. in tests).
 """
 
 from logging.config import fileConfig

@@ -11,9 +11,9 @@ Fixtures
 ``db_engine`` (function)
     An ``AsyncEngine`` on ``pg_url`` (NullPool, so it is safe across per-test event loops).
 ``db_session`` (function)
-    An ``AsyncSession``; all app tables are truncated before each test.
+    An ``AsyncSession``; all app tables (including ``users``) are truncated before each test.
 ``make_user`` (function)
-    Async factory inserting a row into ``auth.users`` (FK target of ``runs.user_id``) and
+    Async factory inserting a row into ``users`` (FK target of ``runs.user_id``) and
     returning its UUID; created users are deleted after the test.
 
 Every test under ``tests/integration/`` is automatically marked ``integration``.
@@ -39,6 +39,7 @@ from sqlalchemy.pool import NullPool
 from alembic import command
 from app.db.base import to_psycopg_url
 from app.db.models import ALL_TABLES
+from app.deps import reset_user_touch_cache
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 PG_BIN = Path("/usr/lib/postgresql/16/bin")
@@ -169,6 +170,7 @@ async def db_engine(pg_url: str) -> AsyncIterator[AsyncEngine]:
 async def truncate_all(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {', '.join(ALL_TABLES)} RESTART IDENTITY CASCADE"))
+    reset_user_touch_cache()  # the auth dependency's "already upserted" cache is now stale
 
 
 @pytest.fixture
@@ -185,11 +187,11 @@ async def make_user(db_engine: AsyncEngine) -> AsyncIterator[Callable[[], Awaita
     async def _make() -> uuid.UUID:
         uid = uuid.uuid4()
         async with db_engine.begin() as conn:
-            await conn.execute(text("INSERT INTO auth.users (id) VALUES (:id)"), {"id": uid})
+            await conn.execute(text("INSERT INTO users (id) VALUES (:id)"), {"id": uid})
         created.append(uid)
         return uid
 
     yield _make
     if created:
         async with db_engine.begin() as conn:
-            await conn.execute(text("DELETE FROM auth.users WHERE id = ANY(:ids)"), {"ids": created})
+            await conn.execute(text("DELETE FROM users WHERE id = ANY(:ids)"), {"ids": created})

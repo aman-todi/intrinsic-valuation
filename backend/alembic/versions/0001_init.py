@@ -1,14 +1,19 @@
-"""Initial schema: runs, run_events, caches, the one-active-run lock, RLS (spec §3).
+"""Initial schema: users, runs, run_events, caches, the one-active-run lock (spec §3).
 
 Revision ID: 0001_init
 Revises:
 Create Date: 2026-09-28
 
-On Supabase the ``auth`` schema, ``auth.users``, ``auth.uid()`` and ``auth.role()`` already exist.
-Plain Postgres (CI / local dev) has none of them, so the upgrade first creates minimal compat shims
-**only if missing** and never replaces the Supabase originals. The downgrade drops only the objects
-this migration owns; the shims (and pgcrypto) are intentionally left in place because on Supabase
-they are not ours.
+Plain Postgres 16 (AWS RDS in production; a local/CI Postgres otherwise) — nothing provider-specific.
+
+- ``users`` mirrors the Cognito users that have called the API: ``id`` is the Cognito ``sub``. Rows
+  are upserted by the API's auth dependency (``app.deps``) on first/periodic use; there is no other
+  writer. ``runs.user_id`` references it ``ON DELETE CASCADE``.
+- No row-level security: the FastAPI app (api + worker) is the ONLY database client. It connects
+  with a single application role and enforces ownership itself (every run query is scoped to the
+  authenticated user id). The database is never exposed to browsers or third parties.
+
+The downgrade drops everything this migration created except the ``pgcrypto`` extension.
 """
 
 from collections.abc import Sequence
@@ -21,53 +26,18 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-AUTH_SHIMS = r"""
-DO $shim$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'auth') THEN
-    EXECUTE 'CREATE SCHEMA auth';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'auth' AND c.relname = 'users' AND c.relkind IN ('r', 'p')
-  ) THEN
-    EXECUTE 'CREATE TABLE auth.users (id uuid PRIMARY KEY)';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'auth' AND p.proname = 'uid'
-  ) THEN
-    EXECUTE $fn$
-      CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $body$
-        SELECT coalesce(
-          nullif(current_setting('request.jwt.claim.sub', true), ''),
-          (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
-        )::uuid
-      $body$
-    $fn$;
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'auth' AND p.proname = 'role'
-  ) THEN
-    EXECUTE $fn$
-      CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $body$
-        SELECT coalesce(
-          nullif(current_setting('request.jwt.claim.role', true), ''),
-          (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')
-        )::text
-      $body$
-    $fn$;
-  END IF;
-END
-$shim$;
-"""
-
 SCHEMA = r"""
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- ============================================================
+-- users (id = Cognito sub)
+-- ============================================================
+CREATE TABLE users (
+  id                   uuid PRIMARY KEY,
+  email                text,
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  last_seen_at         timestamptz
+);
 
 -- ============================================================
 -- runs
@@ -86,7 +56,7 @@ CREATE TYPE run_mode AS ENUM ('auto', 'custom');
 
 CREATE TABLE runs (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id              uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id              uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   ticker               text NOT NULL,
   mode                 run_mode NOT NULL DEFAULT 'auto',
   status               run_status NOT NULL DEFAULT 'classifying',
@@ -197,23 +167,6 @@ CREATE TABLE edgar_filing_cache (
   s3_key            text NOT NULL,
   fetched_at        timestamptz NOT NULL DEFAULT now()
 );
-
--- ============================================================
--- RLS (defense in depth; the backend uses the service role)
--- ============================================================
-ALTER TABLE runs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE run_events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE cached_models ENABLE ROW LEVEL SECURITY;
-ALTER TABLE cached_proposals ENABLE ROW LEVEL SECURITY;
-ALTER TABLE edgar_filing_cache ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY runs_owner_select ON runs FOR SELECT USING (auth.uid() = user_id);
-CREATE POLICY runs_owner_all ON runs FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-CREATE POLICY run_events_owner_select ON run_events FOR SELECT USING (
-  EXISTS (SELECT 1 FROM runs r WHERE r.id = run_events.run_id AND r.user_id = auth.uid())
-);
-CREATE POLICY cached_models_read ON cached_models FOR SELECT USING (auth.role() = 'authenticated');
-CREATE POLICY cached_proposals_read ON cached_proposals FOR SELECT USING (auth.role() = 'authenticated');
 """
 
 DROP_SCHEMA = r"""
@@ -222,6 +175,7 @@ DROP TABLE IF EXISTS cached_proposals;
 DROP TABLE IF EXISTS cached_models;
 DROP TABLE IF EXISTS run_events;
 DROP TABLE IF EXISTS runs;
+DROP TABLE IF EXISTS users;
 DROP FUNCTION IF EXISTS public.runs_set_updated_at();
 DROP TYPE IF EXISTS run_mode;
 DROP TYPE IF EXISTS run_status;
@@ -229,7 +183,6 @@ DROP TYPE IF EXISTS run_status;
 
 
 def upgrade() -> None:
-    op.execute(AUTH_SHIMS)
     op.execute(SCHEMA)
 
 

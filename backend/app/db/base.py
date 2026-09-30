@@ -1,8 +1,12 @@
 """SQLAlchemy async engine/session (spec §9.2).
 
-The running app (api + worker) connects through ``DATABASE_POOLER_URL`` (Supabase Session Pooler)
-with psycopg3 in async mode. Nothing connects at import time: the engine and sessionmaker are built
-lazily on first use.
+The running app (api + worker) and Alembic share one ``DATABASE_URL`` (plain Postgres; AWS RDS in
+production with ``?sslmode=require``), used with psycopg3 in async mode. Nothing connects at import
+time: the engine and sessionmaker are built lazily on first use.
+
+Pool sizing: production is a single RDS db.t4g.micro (max_connections ~80) shared by 2 uvicorn
+workers + 1 SAQ worker process, each with its own engine. ``pool_size=5, max_overflow=5`` caps that
+at 3 x 10 = 30 connections, leaving ample headroom for Alembic, psql and RDS's reserved slots.
 """
 
 from collections.abc import AsyncIterator
@@ -26,8 +30,8 @@ def to_psycopg_url(url: str) -> str:
 def make_engine(url: str, **kwargs: object) -> AsyncEngine:
     """Build an async engine with the §9.2 pool settings (overridable via kwargs)."""
     opts: dict[str, object] = {
-        "pool_size": 10,
-        "max_overflow": 20,
+        "pool_size": 5,
+        "max_overflow": 5,
         "pool_recycle": 300,
         "pool_pre_ping": True,
     }
@@ -36,10 +40,10 @@ def make_engine(url: str, **kwargs: object) -> AsyncEngine:
 
 
 def get_engine() -> AsyncEngine:
-    """Process-wide engine on ``settings.DATABASE_POOLER_URL``, created on first call."""
+    """Process-wide engine on ``settings.DATABASE_URL``, created on first call."""
     global _engine
     if _engine is None:
-        _engine = make_engine(settings.DATABASE_POOLER_URL)
+        _engine = make_engine(settings.DATABASE_URL)
     return _engine
 
 

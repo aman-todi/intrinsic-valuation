@@ -15,19 +15,27 @@ Production: Vercel (Root Directory `frontend`), calling the API cross-origin at 
 | `npm run test:e2e` | Playwright (`tests/e2e`) against `next build && next start`, API mocked via `page.route` |
 
 ## Layout
-- `app/` — `/` (ticker entry, restores an in-progress run on load), `/login` (magic link), `/runs/[id]` (renders purely by `run.status`).
+- `app/` — `/` (ticker entry, restores an in-progress run on load), `/login` (redirects to Cognito managed login), `/auth/callback` (OAuth code exchange), `/runs/[id]` (renders purely by `run.status`).
 - `components/` — `active-run-guard`, `model-confirm-card`, `assumptions-form` (generic, schema-ordered), `progress-view` (SSE overlay; makes the app shell `inert`), `result-view`, `sensitivity-chart`, `ui/` (shadcn-style primitives).
-- `lib/` — `types.ts` (mirrors `backend/app/schemas/run.py` + `valuation_result.py`), `api-client.ts`, `supabase-client.ts`, `run-status.ts`, `format.ts`, `bounds.ts`, `use-run-events.ts`.
+- `lib/` — `types.ts` (mirrors `backend/app/schemas/run.py` + `valuation_result.py`), `api-client.ts`, `auth.ts` (Cognito via `oidc-client-ts`), `run-status.ts`, `format.ts`, `bounds.ts`, `use-run-events.ts`.
 - `mocks/` — MSW v2 handlers implementing the §9.1 contract with a scripted run, plus fixtures. Tickers `FAIL` (declined) and `ERR` (build failure) exercise the error paths.
 
 ## Auth
-Supabase is used only for sign-in. With `NEXT_PUBLIC_SUPABASE_URL` unset the app runs with a
-**dev auth bypass**: every request carries `Authorization: Bearer dev-bypass-token`. The real
-backend rejects that token; never deploy without Supabase configured.
+AWS Cognito is used only for sign-in: Authorization Code + PKCE against Cognito managed login
+(`oidc-client-ts`, `lib/auth.ts`), scopes `openid email`, redirect URI `<origin>/auth/callback`,
+sign-out redirect `<origin>/`. Env: `NEXT_PUBLIC_COGNITO_DOMAIN` (managed-login domain, e.g.
+`https://<prefix>.auth.us-east-1.amazoncognito.com`), `NEXT_PUBLIC_COGNITO_CLIENT_ID`,
+`NEXT_PUBLIC_COGNITO_USER_POOL_ID`, `NEXT_PUBLIC_COGNITO_REGION`. Tokens are kept in localStorage and the
+access token is renewed with the refresh token before it expires. The API receives the **access
+token** (`Authorization: Bearer ...`).
+
+With `NEXT_PUBLIC_COGNITO_CLIENT_ID` unset the app runs with a **dev auth bypass**: every request
+carries `Authorization: Bearer dev-bypass-token`. Only a backend started with `DEV_AUTH_BYPASS=true`
+accepts it; never deploy without Cognito configured.
 
 ## What the backend must support
 - `GET /api/runs/{id}/events?access_token=<jwt>` — `EventSource` cannot send headers, so the SSE
-  route must accept the Supabase access token as a query parameter (in addition to the header).
+  route must accept the Cognito access token as a query parameter (in addition to the header).
 - CORS for the frontend origin including the `Authorization` header (when not same-origin).
 - `RunOut.assumptions_schema` / `cache_hit_available` populated at `awaiting_confirm`.
 - `POST /confirm` with `assumptions: null` (and `edited: false`) means "build from the proposal".

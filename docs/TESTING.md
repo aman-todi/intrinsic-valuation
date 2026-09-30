@@ -2,7 +2,7 @@
 
 How the test suite is organized, how to run it locally, and what CI enforces (SPEC §13, §15 Ticket 14).
 
-The suite is deliberately small: **155 tests** (backend 132 = 90 unit + 42 integration; frontend 18
+The suite is deliberately small: **161 tests** (backend 136 = 93 unit + 43 integration; frontend 20
 Vitest + 5 Playwright), each parametrized case counted as one test. The rule is one or two strong tests
 per behavior (pinned hand-computed regressions, real LibreOffice / WeasyPrint / Postgres / Redis where it
 matters) rather than many near-duplicates. Table-driven loops inside one test are used where the rows are
@@ -44,8 +44,8 @@ Run one layer at a time:
 | Proposer / bounds | 11 | Repair loop (re-prompts with violations, gives up after 3), SOTP one call per segment + consolidated, deterministic fallback passes bounds for every model type at normal/tiny/zero risk-free rates, sparse-data fallback, LLM failure -> fallback. Bounds: table-driven pass/violate per rule family (single-field ranges, cross-field rules, SOTP structure). |
 | EDGAR | 13 unit + 1 integration | Structure of every normalized fixture, AAPL annual figures, TTM with a September FYE, restatement (latest filed wins), tag fallback order, 20-F filer helpers, GOOGL multi-class share summing; client User-Agent/gzip, 429/5xx retry with Retry-After, retries exhausted, filing-cache hit; shared Redis rate limiter (fakeredis + real Redis); segment XBRL parsing and fetch order. |
 | Market / macro | 10 | FRED "." observations skipped and all-missing never becomes 0; yfinance one retry then a typed error; Damodaran spreadsheet parsing; SIC map (one table-driven test, incl. every mapped name exists in the snapshot); snapshot fallback when S3 is unreachable; S3 save/load-latest; market snapshot assembly. |
-| Auth / storage / runs / schemas | 16 | Assumption schemas flat and all-required, missing field rejected; JWKS valid / expired / unknown kid refreshes exactly once, 401s from `current_user`; storage key traversal and signed URLs; cache key; run state machine table + transition side effects; `run_cancellable` pub/sub cancel and protected section; demo providers; SAQ settings. |
-| DB + run lifecycle (integration) | 26 | Migration downgrade/upgrade round trip, RLS on every table, one-active-run index; AAPL auto end to end through the API and both jobs (real LibreOffice check); 409 lock (and on confirm); cache hit + private fork, out-of-bounds confirm rejected, model override re-proposes; single-flight (two builds run the pipeline once; stale lock); cancel mid-build (sentinel: nothing promoted), during the LLM proposal, at awaiting_confirm, and on worker shutdown; stale-cancel recovery; route auth (401 on every route, 404 for another user's run, SSE `access_token` + Last-Event-ID resume, live SSE build); life insurer declined; market outage fails the run; no LLM -> deterministic proposal; demo mode AAPL end to end + SOTP build with real recalc. |
+| Auth / storage / runs / schemas | 19 | Assumption schemas flat and all-required, missing field rejected; Cognito JWKS: valid access token / expired / wrong client_id / id token / wrong issuer rejected / unknown kid refreshes exactly once, 401s and user upsert from `current_user`; storage key traversal and signed URLs; cache key; run state machine table + transition side effects; `run_cancellable` pub/sub cancel and protected section; demo providers; SAQ settings. |
+| DB + run lifecycle (integration) | 27 | Migration downgrade/upgrade round trip, `users` FK cascade (no RLS, no `auth` schema), one-active-run index; AAPL auto end to end through the API and both jobs (real LibreOffice check); 409 lock (and on confirm); cache hit + private fork, out-of-bounds confirm rejected, model override re-proposes; single-flight (two builds run the pipeline once; stale lock); cancel mid-build (sentinel: nothing promoted), during the LLM proposal, at awaiting_confirm, and on worker shutdown; stale-cancel recovery; route auth (401 on every route, first request upserts `users` + dev bypass, 404 for another user's run, SSE `access_token` + Last-Event-ID resume, live SSE build); life insurer declined; market outage fails the run; no LLM -> deterministic proposal; demo mode AAPL end to end + SOTP build with real recalc. |
 
 ### EDGAR fixtures (the 20-ticker set)
 
@@ -76,9 +76,9 @@ mismatches between the normalizer and the engines.
 
 ### Coverage gates
 
-| Scope | Gate | Full suite (810 tests) | Slim suite (132 tests) |
+| Scope | Gate | Full suite (810 tests) | Slim suite (136 tests) |
 |---|---|---|---|
-| overall `app` | `--cov-fail-under=75` | 95.7% | 90.6% |
+| overall `app` | `--cov-fail-under=75` | 95.7% | 90.7% |
 | `app/valuation/*` | ≥ 85% (`scripts/check_coverage.sh`) | 99.0% | 93.5% |
 | `app/classify/*` | not gated | 99.8% | 91.9% |
 | `app/assumptions/*` | not gated | 97.7% | 95.7% |
@@ -103,7 +103,7 @@ npx playwright install --with-deps chromium   # once
 npm run test:e2e    # Playwright against `next build && next start`, API mocked via route interception
 ```
 
-- **Vitest (18):** assumptions form (read-only formatting with rationale/source, editable toggle with
+- **Vitest (20):** auth (Cognito OIDC settings, dev bypass, refresh-token renewal shared by concurrent callers, local sign-out on renewal failure); assumptions form (read-only formatting with rationale/source, editable toggle with
   edits propagated as decimals, client-side bound warnings, SOTP read-only, schema ordering + edit
   detection); active-run guard (no run, building locks, polling unlocks at awaiting_confirm, a run
   appearing in another tab locks); model confirm card (display + override); format helpers (per-kind
@@ -122,31 +122,23 @@ npm run test:e2e    # Playwright against `next build && next start`, API mocked 
 - **`ci-frontend.yml`** uses Node 24 and runs `npm ci`, lint, Vitest, build, the Playwright Chromium
   install (`--with-deps`), and the Playwright e2e suite. The HTML report is uploaded when a step fails.
 
-### Why CI uses a local Postgres container instead of a Supabase branch
+### Why CI uses a local Postgres container
 
-SPEC §13.1 allows either "a disposable Supabase branch or a local Postgres in CI". CI uses the local
-container for these reasons:
+CI runs the integration tests against a throwaway Postgres 16 service container, never the RDS instance:
 
-1. **Isolation from shared data.** A Supabase branch belongs to the real project: same organization,
-   same billing, same dashboard. A misconfigured `DATABASE_URL` in CI could point at production. The
-   service container can only ever reach itself.
-2. **Nothing the tests need is Supabase-specific.** The schema is plain Postgres 16 plus Alembic. The
-   initial migration creates stub `auth.users`, `auth.uid()` and `auth.role()` when the Supabase `auth`
-   schema is missing. JWT verification is tested against a respx-mocked JWKS endpoint with a test ES256
-   key, not against Supabase Auth.
-3. **Cost and quotas.** Supabase branching is a paid feature. Each branch is a billed compute instance
-   that takes minutes to provision, and branch creation needs a Supabase access token as a CI secret.
-   The container starts in seconds and needs no secrets, so PRs from forks also get full integration
-   runs.
+1. **Isolation from shared data.** A misconfigured `DATABASE_URL` in CI can never reach production:
+   the service container can only ever reach itself.
+2. **Nothing the tests need is AWS-specific.** The schema is plain Postgres 16 plus Alembic (the same
+   migrations run on RDS). Cognito access-token verification is tested against a respx-mocked JWKS
+   endpoint with a locally generated RS256 key, not against a real user pool.
+3. **No secrets, no cost.** The container starts in seconds and needs no credentials, so PRs from
+   forks also get full integration runs.
 4. **Determinism.** Each test truncates every app table (`db_session` fixture), and the migrations run
-   from scratch on every CI run. That gives the same guarantee a fresh branch would, without depending
-   on the network or on Supabase's availability.
+   from scratch on every CI run.
 
-What this does not cover is the behavior of the real Supabase project: its RLS policies under the
-`authenticated` role, the session pooler, and the IPv6-only direct host. Those are checked by the
-deployment smoke test (`docs/DEPLOYMENT.md` → "A8. Smoke test") and by the RLS sanity query in "A2. Supabase". If the project
-later needs RLS regression tests, add a separate, manually triggered workflow against a Supabase
-branch. Do not make it part of the per-PR gate.
+What this does not cover is the real RDS instance (TLS via `sslmode=require`, the security group) and
+the real Cognito user pool / managed login. Those are checked by the deployment smoke test
+(`docs/DEPLOYMENT.md`).
 
 ## Offline demo mode
 

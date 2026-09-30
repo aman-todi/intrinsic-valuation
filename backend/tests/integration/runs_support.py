@@ -1,7 +1,8 @@
 """Shared harness for the run-lifecycle integration tests (tickets 11/12).
 
-Real Postgres + Redis (from the integration conftest), the real FastAPI app over ASGI, real ES256 JWTs
-verified against a respx-mocked JWKS, local-filesystem artifact storage, and mocked externals:
+Real Postgres + Redis (from the integration conftest), the real FastAPI app over ASGI, real RS256
+Cognito-style access tokens verified against a respx-mocked JWKS, local-filesystem artifact storage,
+and mocked externals:
 
 - EDGAR (``data.sec.gov`` / ``www.sec.gov``) served from ``tests/fixtures/edgar`` via respx;
   Archives documents 404 (segments are best effort);
@@ -16,6 +17,7 @@ Jobs are executed by calling the job functions directly with :meth:`Env.ctx` —
 from __future__ import annotations
 
 import asyncio
+import functools
 import uuid
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
@@ -57,10 +59,16 @@ from tests.fixtures.edgar import (
     load_companyfacts,
     load_submissions,
 )
-from tests.unit.test_auth_jwks import Signer
+from tests.unit.test_auth_jwks import CLIENT_ID, ISSUER, JWKS_URL, Signer
 
-JWKS_URL = "https://test.supabase.local/auth/v1/.well-known/jwks.json"
 FRED_RATE_PCT = "4.20"
+
+
+@functools.cache
+def _signer() -> Signer:
+    return Signer("kid-test")  # RSA keygen is slow-ish: one keypair per session
+
+
 LIVE_PRICE = 200.0
 
 
@@ -349,7 +357,7 @@ async def env(
         monkeypatch.setattr(rv, "verify_workbook", _fast_verify)
     monkeypatch.setattr(runs_routes, "SSE_POLL_INTERVAL_S", 0.05)
 
-    signer = Signer("kid-test")
+    signer = _signer()
     settings = get_settings().model_copy(
         update={"FRED_API_KEY": "test-fred-key", "RISK_FREE_RATE_OVERRIDE": None}
     )
@@ -358,7 +366,7 @@ async def env(
         router.route(host="testserver").pass_through()
         routes = install_http_mocks(router, signer)
         jwks_http = httpx.AsyncClient()
-        set_jwks_client(JWKSClient(JWKS_URL, http_client=jwks_http))
+        set_jwks_client(JWKSClient(ISSUER, CLIENT_ID, http_client=jwks_http))
         edgar = EdgarClient(
             "DCF-Test test@example.com",
             EdgarRateLimiter(redis),

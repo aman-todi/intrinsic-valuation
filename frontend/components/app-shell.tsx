@@ -81,7 +81,7 @@ function Header() {
         </div>
         <div className="flex items-center gap-3 text-sm">
           {devBypass && (
-            <Badge variant="warning" title="NEXT_PUBLIC_SUPABASE_URL is unset — using a fixed fake token">
+            <Badge variant="warning" title="NEXT_PUBLIC_COGNITO_CLIENT_ID is unset — using a fixed fake token">
               Dev auth bypass
             </Badge>
           )}

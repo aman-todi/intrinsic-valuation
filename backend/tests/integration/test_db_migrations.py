@@ -1,5 +1,7 @@
 """Migration 0001_init against a real Postgres (Ticket 2)."""
 
+import uuid
+
 import psycopg
 import pytest
 from sqlalchemy import create_engine, text
@@ -35,8 +37,6 @@ def test_downgrade_then_upgrade_roundtrip(pg_url: str) -> None:
                 text("SELECT typname FROM pg_type WHERE typname IN ('run_status', 'run_mode')")
             ).all()
             assert types == []
-            # compat shims are left alone by the downgrade
-            assert conn.execute(text("SELECT to_regclass('auth.users')")).scalar() is not None
     finally:
         command.upgrade(cfg, "head")
         engine.dispose()
@@ -46,33 +46,40 @@ def test_downgrade_then_upgrade_roundtrip(pg_url: str) -> None:
     engine.dispose()
 
 
-def test_rls_enabled_on_all_tables(pg_url: str) -> None:
-    engine = _sync_engine(pg_url)
-    with engine.connect() as conn:
-        rows = dict(
-            conn.execute(
-                text(
-                    "SELECT relname, relrowsecurity FROM pg_class "
-                    "WHERE relnamespace = 'public'::regnamespace AND relname = ANY(:t)"
-                ),
-                {"t": list(ALL_TABLES)},
-            ).all()
+async def test_deleting_user_cascades_to_runs_and_events(db_session: AsyncSession, make_user) -> None:
+    uid = await make_user()
+    other = await make_user()
+    run_id = (
+        await db_session.execute(
+            text("INSERT INTO runs (user_id, ticker) VALUES (:uid, 'AAPL') RETURNING id"), {"uid": uid}
         )
-        policies = {
-            r[0]
-            for r in conn.execute(
-                text("SELECT policyname FROM pg_policies WHERE schemaname = 'public'")
-            ).all()
-        }
-    engine.dispose()
-    assert rows == dict.fromkeys(ALL_TABLES, True)
-    assert policies == {
-        "runs_owner_select",
-        "runs_owner_all",
-        "run_events_owner_select",
-        "cached_models_read",
-        "cached_proposals_read",
-    }
+    ).scalar_one()
+    await db_session.execute(
+        text("INSERT INTO run_events (run_id, stage, message) VALUES (:r, 'classifying', 'x')"), {"r": run_id}
+    )
+    await db_session.execute(INSERT_RUN, {"uid": other, "status": "complete"})
+    await db_session.commit()
+
+    # runs.user_id must reference an existing user
+    with pytest.raises(IntegrityError) as ei:
+        await db_session.execute(INSERT_RUN, {"uid": uuid.uuid4(), "status": "complete"})
+    await db_session.rollback()
+    assert isinstance(ei.value.orig, psycopg.errors.ForeignKeyViolation)
+
+    await db_session.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": uid})
+    await db_session.commit()
+    assert (await db_session.execute(text("SELECT count(*) FROM runs"))).scalar() == 1
+    assert (await db_session.execute(text("SELECT count(*) FROM run_events"))).scalar() == 0
+    # plain Postgres: no auth schema, no RLS anywhere
+    assert (await db_session.execute(text("SELECT to_regnamespace('auth')"))).scalar() is None
+    rls = (
+        await db_session.execute(
+            text(
+                "SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relrowsecurity"
+            )
+        )
+    ).scalar()
+    assert rls == 0
 
 
 async def test_one_active_run_per_user_raw_insert(db_session: AsyncSession, make_user) -> None:

@@ -20,10 +20,9 @@ jobs:
     defaults:
       run:
         working-directory: backend
-    # Throwaway Postgres 16 + Redis as service containers (NOT the real Supabase project: CI must never
-    # touch shared/prod data; see docs/TESTING.md). The integration conftest reads TEST_DATABASE_URL /
-    # TEST_REDIS_URL and runs `alembic upgrade head` against the service DB before the tests; the initial
-    # migration creates stub auth.users / auth.uid() when the Supabase `auth` schema is absent.
+    # Throwaway Postgres 16 + Redis as service containers (never the RDS instance: CI must not touch
+    # shared/prod data; see docs/TESTING.md). The integration conftest reads TEST_DATABASE_URL /
+    # TEST_REDIS_URL and runs `alembic upgrade head` against the service DB before the tests.
     services:
       postgres:
         image: postgres:16
@@ -39,7 +38,6 @@ jobs:
           --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
-      DATABASE_POOLER_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
       TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
       REDIS_URL: redis://localhost:6379
       TEST_REDIS_URL: redis://localhost:6379

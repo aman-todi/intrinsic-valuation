@@ -9,12 +9,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", "../.env"), extra="ignore")
 
-    # Supabase
-    SUPABASE_URL: str = "http://localhost:54321"
-    SUPABASE_ANON_KEY: str = ""
-    SUPABASE_SERVICE_ROLE_KEY: str = ""
+    # Auth: AWS Cognito user pool. The API accepts access tokens issued to COGNITO_APP_CLIENT_ID.
+    COGNITO_REGION: str = "us-east-1"
+    COGNITO_USER_POOL_ID: str = ""
+    COGNITO_APP_CLIENT_ID: str = ""
+
+    # Postgres (AWS RDS in production; add ?sslmode=require there). Used by the app AND Alembic.
     DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/postgres"
-    DATABASE_POOLER_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/postgres"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379"
@@ -68,7 +69,7 @@ class Settings(BaseSettings):
     # to SEC / Yahoo / FRED. Every run is flagged "DEMO DATA". NEVER enable in a deployed environment.
     DATA_SOURCE_MODE: Literal["live", "fixtures"] = "live"
 
-    # Local dev only: accept "Bearer dev-bypass-token" (the frontend's no-Supabase mode) as a fixed
+    # Local dev only: accept "Bearer dev-bypass-token" (the frontend's no-Cognito mode) as a fixed
     # dev user. NEVER enable against a shared/production database.
     DEV_AUTH_BYPASS: bool = False
 

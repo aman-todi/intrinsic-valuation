@@ -1,11 +1,11 @@
 /**
  * Typed client for the backend REST/SSE contract (§9.1).
  *
- * Every request carries `Authorization: Bearer <supabase access token>`. The base URL comes
+ * Every request carries `Authorization: Bearer <Cognito access token>`. The base URL comes
  * from NEXT_PUBLIC_API_BASE_URL (inlined at build time); when empty, requests are relative
  * to the current origin (used by the MSW mock in `npm run dev:mock`).
  */
-import { getAccessToken } from "./supabase-client";
+import { getAccessToken } from "./auth";
 import type {
   ActiveRunConflict,
   ConfirmRunRequest,
