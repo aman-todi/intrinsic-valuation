@@ -15,7 +15,7 @@ frontend_origins = [
 ]
 
 # Optional: auth (Cognito)
-# cognito_allow_self_signup   = false # true = anyone can sign up; default invite-only (admin-create-user)
+# cognito_allow_self_signup   = true  # default: open sign-up; false = invite-only (admin-create-user)
 # cognito_email_otp_enabled   = true  # passwordless email codes next to the password (50 emails/day limit)
 # cognito_localhost_callbacks = true  # allow http://localhost:3000 sign-in against this pool
 # cognito_domain_prefix       = ""    # default <project>-<random hex>

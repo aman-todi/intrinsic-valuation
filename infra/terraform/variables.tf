@@ -96,9 +96,9 @@ variable "worker_concurrency" {
 
 # ---------- auth (Cognito) ----------
 variable "cognito_allow_self_signup" {
-  description = "false (default) = invite-only: users are created with admin-create-user. true = anyone can sign up on the managed login page."
+  description = "true (default) = anyone can sign up on the managed login page (email + password, email verified by code). false = invite-only: users are created with admin-create-user."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "cognito_email_otp_enabled" {

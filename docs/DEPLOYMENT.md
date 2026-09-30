@@ -13,7 +13,7 @@ Use the [order of operations](#order-of-operations) table to move between the tw
 ```
  browser ──HTTPS──> Vercel (Next.js frontend; NEXT_PUBLIC_* only, no server secrets)
     │  └──redirect (Authorization Code + PKCE)──> Cognito managed login  https://<prefix>.auth.<region>.amazoncognito.com
-    │                                             (user pool dcf-users; invite-only by default; password or email code)
+    │                                             (user pool dcf-users; open sign-up by default; password or email code)
     │
     └──HTTPS (CORS, Authorization: Bearer <Cognito access token>)
          ──> EC2 t4g.small, Elastic IP, Amazon Linux 2023 arm64   (security group dcf-app: 80/443 only)
@@ -114,7 +114,7 @@ Run `cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvar
 | `github_owner` / `github_repo` | for example `aman-todi` / `intrinsic-valuation`. Only `refs/heads/main` of this repo can assume the deploy role |
 | `alert_email` | budget alerts and the Let's Encrypt contact |
 | `frontend_origins` | `[]` for now. After [A4](#a4-vercel-frontend), `["https://<your-app>.vercel.app"]`. This **one list** feeds the API's `CORS_ORIGINS` **and** the Cognito app client's callback URLs (`<origin>/auth/callback`) and sign-out URLs (`<origin>/`). Exact origins, `https://`, no trailing slash, no wildcards. (It replaces the former `cors_origins` variable; rename it in an existing `terraform.tfvars`.) |
-| `cognito_allow_self_signup` | `false` (default): invite-only, users are created by you ([A6](#a6-users-cognito)). `true`: anyone can create an account on the managed login page |
+| `cognito_allow_self_signup` | `true` (default): anyone can create an account on the managed login page (email + password, verified by an emailed code). `false`: invite-only, users are created by you ([A6](#a6-users-cognito)) |
 | `cognito_email_otp_enabled` | `true` (default): the sign-in page offers "email me a code" next to the password. Every code is an email and counts toward the [50 emails/day](#email-sending-limits) limit; set `false` for password-only |
 | `cognito_localhost_callbacks` | `true` (default): also allows `http://localhost:3000/auth/callback` and `http://localhost:3000/`, so a local frontend can sign in against this pool. Set `false` to lock the pool to the deployed origins |
 | `cognito_domain_prefix` | optional; empty = `dcf-<random hex>` → `https://dcf-1a2b3c4d.auth.us-east-1.amazoncognito.com` |
@@ -181,7 +181,7 @@ Protect `main` with required status checks (`ci-backend`, `ci-frontend`). The de
 
 ## A6. Users (Cognito)
 
-The pool is **invite-only** by default (`cognito_allow_self_signup = false`). The username **is** the email address. An invited user gets an email with a temporary password (valid 7 days), signs in on the managed login page and must choose a new password (≥ 12 characters, upper and lower case and a digit). After that they can sign in with the password or, if `cognito_email_otp_enabled`, with a one-time code sent by email. Users can turn on an authenticator app (TOTP) as optional MFA. A user with TOTP turned on signs in with password + TOTP only; Cognito does not offer the passwordless email code to users who have MFA.
+Sign-up is **open** by default (`cognito_allow_self_signup = true`): anyone can create an account on the managed login page with their email and a password, and confirms the email with a code Cognito sends (the default Cognito sender allows ~50 emails/day). Set it to `false` for invite-only. The username **is** the email address. An invited user gets an email with a temporary password (valid 7 days), signs in on the managed login page and must choose a new password (≥ 12 characters, upper and lower case and a digit). After that they can sign in with the password or, if `cognito_email_otp_enabled`, with a one-time code sent by email. Users can turn on an authenticator app (TOTP) as optional MFA. A user with TOTP turned on signs in with password + TOTP only; Cognito does not offer the passwordless email code to users who have MFA.
 
 **CLI** (from `infra/terraform/`):
 
@@ -272,7 +272,7 @@ What it creates (prefix `dcf`):
 | `aws_db_parameter_group.main` | `postgres17` family with **`rds.force_ssl = 1`** (non-TLS connections are refused) |
 | `aws_db_subnet_group.main`, `aws_security_group.db` | All default-VPC subnets; inbound **5432 only from the `dcf-app` security group**, no egress |
 | `random_password.db` → `aws_ssm_parameter.database_url` | 32-char alphanumeric master password; SecureString **`/dcf/prod/DATABASE_URL`** = `postgresql+psycopg://dcf_app:<password>@<rds endpoint>:5432/dcf?sslmode=require`. In Terraform state (see the note under [Architecture](#architecture)) |
-| `aws_cognito_user_pool.main` (`dcf-users`) | **Essentials** tier, email as username (case-insensitive, auto-verified), invite-only unless `cognito_allow_self_signup`, password ≥ 12 (upper/lower/digit), first factors `PASSWORD` (+ `EMAIL_OTP`), **optional TOTP MFA**, recovery via verified email, `COGNITO_DEFAULT` email sender, deletion protection |
+| `aws_cognito_user_pool.main` (`dcf-users`) | **Essentials** tier, email as username (case-insensitive, auto-verified), open sign-up unless `cognito_allow_self_signup = false`, password ≥ 12 (upper/lower/digit), first factors `PASSWORD` (+ `EMAIL_OTP`), **optional TOTP MFA**, recovery via verified email, `COGNITO_DEFAULT` email sender, deletion protection |
 | `aws_cognito_user_pool_domain.main` | Managed login **v2** on `https://<prefix>.auth.<region>.amazoncognito.com` (`random_id` suffix unless `cognito_domain_prefix`) |
 | `aws_cognito_user_pool_client.web` + `aws_cognito_managed_login_branding.web` | **Public** client (no secret): `code` flow (PKCE), scopes `openid email`, IdP `COGNITO`, callbacks `<frontend_origins>/auth/callback` (+ localhost), sign-out `<frontend_origins>/` (+ localhost), access/ID tokens 1 h, refresh 30 d, token revocation on, user-existence errors hidden, auth flows `ALLOW_USER_AUTH` + `ALLOW_REFRESH_TOKEN_AUTH`. Default Cognito branding |
 | IAM `dcf-app-instance` role and profile | `AmazonSSMManagedInstanceCore`; ECR pull (2 repos); S3 List/Get/Put/Delete on the bucket; `ssm:GetParameter*` on `/dcf/prod/*`; `kms:Decrypt` only via SSM. (Nothing RDS- or Cognito-specific: the DB is reached over the network with `DATABASE_URL`, and token validation only fetches the public JWKS) |

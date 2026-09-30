@@ -1310,7 +1310,7 @@ Driver: **psycopg (v3)**, async mode, via the `postgresql+psycopg://` SQLAlchemy
 
 ### 9.3 Auth (AWS Cognito, access tokens verified via JWKS)
 
-A Cognito user pool (managed login, email + password or email one-time code, optional TOTP MFA; invite-only by default) issues RS256-signed tokens. The API verifies **access tokens** locally against the pool's JWKS, cached for an hour, with no round trip to Cognito per request.
+A Cognito user pool (managed login, email + password or email one-time code, optional TOTP MFA; open self sign-up with email verification by default) issues RS256-signed tokens. The API verifies **access tokens** locally against the pool's JWKS, cached for an hour, with no round trip to Cognito per request.
 
 ```python
 # backend/app/auth/jwks.py
@@ -1443,7 +1443,7 @@ State lives in an S3 bucket created once by `infra/terraform/bootstrap/` (versio
 - **Compute**: one EC2 instance, Amazon Linux 2023 arm64 (AMI from the public SSM parameter), `instance_type` variable (default `t4g.small`; `t4g.medium` when memory is tight), 30 GB encrypted gp3 root volume, IMDSv2 only (hop limit 2 so containers can use the instance role), `cpu_credits` variable (default `unlimited`), 2 GB swapfile. **Elastic IP**. CloudWatch alarms auto-recover on a system status-check failure and reboot on an instance status-check failure.
 - **First boot (`user_data`)**: installs Docker, the compose plugin (checksum-verified), AWS CLI, Docker log rotation, the swapfile, and `/opt/dcf`.
 - **Network**: default VPC. Security group allows inbound TCP 80/443 and UDP 443 from anywhere (IPv4 + IPv6) and all egress. **No SSH port and no key pair** — shell access is via SSM Session Manager.
-- **Auth (`auth.tf`)**: Cognito user pool (Essentials tier; email as username, auto-verified; first factors password and email one-time code; optional TOTP MFA; account recovery by email; invite-only unless `cognito_allow_self_signup`; Cognito default email sender, SES as the upgrade path; deletion protection). Managed-login domain `dcf-<suffix>.auth.<region>.amazoncognito.com` with Cognito-provided branding. Public app client `dcf-web` (no secret, code flow + PKCE, scopes `openid email`, callbacks `<origin>/auth/callback` and sign-out `<origin>/` for each of `frontend_origins` plus localhost; access/ID tokens 1 h, refresh 30 d; token revocation on).
+- **Auth (`auth.tf`)**: Cognito user pool (Essentials tier; email as username, auto-verified; first factors password and email one-time code; optional TOTP MFA; account recovery by email; open self sign-up with email verification by default (`cognito_allow_self_signup = false` makes it invite-only); Cognito default email sender, SES as the upgrade path; deletion protection). Managed-login domain `dcf-<suffix>.auth.<region>.amazoncognito.com` with Cognito-provided branding. Public app client `dcf-web` (no secret, code flow + PKCE, scopes `openid email`, callbacks `<origin>/auth/callback` and sign-out `<origin>/` for each of `frontend_origins` plus localhost; access/ID tokens 1 h, refresh 30 d; token revocation on).
 - **Database (`database.tf`)**: RDS PostgreSQL 17 `db.t4g.micro`, 20 GB gp3 (autoscaling to 50 GB), encrypted, single-AZ in the app host's AZ, not publicly accessible, security group allowing 5432 **only from the app host's security group**, parameter group with `rds.force_ssl = 1`, 7-day automated backups, deletion protection and a final snapshot. Terraform generates the password (`random_password`) and writes `DATABASE_URL` (`…?sslmode=require`) to SSM as a SecureString; the value therefore also lives in the encrypted, private state bucket.
 - **Storage**: S3 artifact bucket (public access blocked, SSE-S3, TLS-only; lifecycle expires `models/` and `runs/` after 35 days, `deploy/` bundles after 90 days). ECR repositories `dcf-api` and `dcf-worker` (scan on push, keep last 10 images).
 - **IAM**:
@@ -1625,7 +1625,7 @@ Backend CI installs `libreoffice-calc` and the WeasyPrint system libraries (the 
 
 ### 14.2 Cognito users
 
-Users are invited, not self-registered (unless `cognito_allow_self_signup = true`): `aws cognito-idp admin-create-user --user-pool-id <pool> --username <email> --user-attributes Name=email,Value=<email> Name=email_verified,Value=true`, or **Cognito console → User pools → dcf-users → Users → Create user**. The invite email carries a temporary password; users can then sign in with password or an emailed one-time code. The default Cognito email sender is limited to ~50 emails/day — configure SES if that becomes a constraint. The app's `users` row is created automatically on each user's first API call.
+Anyone can sign up on the managed login page (email + password; Cognito emails a verification code). With `cognito_allow_self_signup = false` the pool is invite-only and users are created with `aws cognito-idp admin-create-user --user-pool-id <pool> --username <email> --user-attributes Name=email,Value=<email> Name=email_verified,Value=true`, or **Cognito console → User pools → dcf-users → Users → Create user**. The invite email carries a temporary password; users can then sign in with password or an emailed one-time code. The default Cognito email sender is limited to ~50 emails/day — configure SES if that becomes a constraint. The app's `users` row is created automatically on each user's first API call.
 
 ### 14.3 Anthropic
 
