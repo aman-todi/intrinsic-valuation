@@ -1,18 +1,23 @@
 # Non-secret runtime/deploy config, owned by Terraform, under /<project>/prod/config/<KEY> (plain String).
-# On every deploy the instance renders /opt/dcf/.env from ALL parameters under /<project>/prod
-# (these plus the SecureStrings put_ssm_params.sh writes at /<project>/prod/<KEY>); the basename is the
-# env var name and config/ wins on a clash. The deploy role can read config/* only (INSTANCE_ID etc.).
+# On every deploy the instance renders /opt/dcf/.env from ALL parameters under /<project>/prod: these,
+# the Terraform-owned SecureString DATABASE_URL (database.tf) and the owner's secrets that
+# put_ssm_params.sh writes at /<project>/prod/<KEY>. The basename is the env var name and config/ wins on
+# a clash. The deploy role can read config/* only (INSTANCE_ID etc.), never the secrets.
 locals {
   ssm_config = {
     APP_DOMAIN          = local.app_domain
     PUBLIC_API_BASE_URL = local.api_url
-    CORS_ORIGINS        = join(",", var.cors_origins)
+    CORS_ORIGINS        = join(",", var.frontend_origins)
     ACME_EMAIL          = local.acme_email
     AWS_REGION          = local.region
     S3_BUCKET_NAME      = aws_s3_bucket.artifacts.id
     ECR_REGISTRY        = local.ecr_registry
     INSTANCE_ID         = aws_instance.app.id
     WORKER_CONCURRENCY  = tostring(var.worker_concurrency)
+    # The API validates Cognito access tokens against these (issuer + JWKS + client_id claim).
+    COGNITO_REGION        = local.region
+    COGNITO_USER_POOL_ID  = aws_cognito_user_pool.main.id
+    COGNITO_APP_CLIENT_ID = aws_cognito_user_pool_client.web.id
   }
 }
 
