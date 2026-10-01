@@ -245,7 +245,7 @@ The pool sends email with Cognito's built-in sender (`COGNITO_DEFAULT`, from `no
 ## A8. Smoke test
 
 1. Run `curl https://<api host>/api/health`, which should return `{"status":"ok"}`. HTTP must redirect to HTTPS.
-2. Run `curl -si https://<api host>/api/runs` without a token. It must be rejected (401).
+2. Run `curl -si https://<api host>/api/runs/active` without a token. It must be rejected (401).
 3. Run `curl -si -X OPTIONS https://<api host>/api/runs -H 'Origin: https://<your-app>.vercel.app' -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: authorization,content-type' | grep -i access-control-allow-origin`. It should echo the Vercel origin.
 4. **Sign in** on the Vercel URL. You should be redirected to the Cognito managed login page (`https://<prefix>.auth.<region>.amazoncognito.com/…`), sign in with an invited user (first time: temporary password, then choose a new one; later: password or email code), and land back on the Vercel URL via `/auth/callback`, signed in. A `redirect_mismatch` error means the origin is missing from `frontend_origins` (A4 step 5).
 5. **Sign out** returns to the Vercel home page, and signing in again asks for credentials.
