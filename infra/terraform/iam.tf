@@ -131,7 +131,7 @@ resource "aws_iam_role" "github_deploy" {
 resource "aws_iam_user" "github_deploy" {
   count = local.github_oidc ? 0 : 1
   name  = "${local.name}-github-deploy"
-  tags  = { Purpose = "GitHub Actions deploys (access key stored as GitHub secrets)" }
+  tags  = { Purpose = "GitHub Actions deploys - access key stored as GitHub secrets" }
 }
 
 data "aws_iam_policy_document" "github_deploy" {
