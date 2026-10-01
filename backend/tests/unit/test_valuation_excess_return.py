@@ -38,7 +38,7 @@ def test_bank_case_hand_computed():
     assert r.non_operating_adjustments == []
     assert r.model_type == "excess_return"
     assert r.run_date == "2026-03-15"
-    assert r.engine_version == ENGINE_VERSION == "v1"
+    assert r.engine_version == ENGINE_VERSION
     assert r.assumptions_used["cost_of_equity"]["value"] == 0.10
     # projection rows
     assert [row["year"] for row in r.projection_rows] == [1, 2, 3, 4, 5]

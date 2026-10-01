@@ -10,8 +10,9 @@ from app.data.edgar.normalize import (
     latest_10k,
     latest_periodic_accession,
     normalize,
+    window_flags,
 )
-from app.schemas.financials import NormalizedFinancials
+from app.schemas.financials import DataFlag, NormalizedFinancials
 from tests.fixtures.edgar import (
     COMPANYFACTS_TICKERS,
     load_companyfacts,
@@ -178,3 +179,45 @@ def test_foreign_filer_submissions_helpers() -> None:
     assert {"20-F", "6-K"} <= forms and not forms & {"10-K", "10-Q"}
     assert latest_periodic_accession(sub) is None
     assert latest_10k(sub) is None
+
+
+def test_window_flags_keep_only_the_models_window():
+    """Flags outside the last N fiscal years (+ TTM) are dropped, period lists are cut to the window,
+    methodology notes are hidden unless asked for, and the full list stays on the financials."""
+    base = load_normalized("AAPL")  # FY2015-FY2024 + TTM
+    nf = base.model_copy(
+        update={
+            "data_flags": [
+                DataFlag(
+                    message="interest_expense: not reported, assumed 0",
+                    periods=["FY2016", "FY2023", "FY2024", "TTM"],
+                ),
+                DataFlag(
+                    message="operating_lease_liability: not reported, assumed 0",
+                    periods=["FY2015", "FY2016", "FY2017"],
+                ),
+                DataFlag(message="revenue jump FY2016 (+60% vs FY2015)", scope=["FY2016"]),
+                DataFlag(message="revenue jump FY2022 (+55% vs FY2021)", scope=["FY2022"]),
+                DataFlag(
+                    message="total_debt: derived as sum of A + B",
+                    periods=["FY2020", "FY2021", "FY2022", "FY2023", "FY2024", "TTM"],
+                    note=True,
+                ),
+                DataFlag(message="only 4 fiscal years of annual data available"),
+            ]
+        }
+    )
+    assert window_flags(nf, 5) == [
+        "interest_expense: not reported, assumed 0 (FY2023, FY2024, TTM)",
+        "revenue jump FY2022 (+55% vs FY2021)",
+        "only 4 fiscal years of annual data available",
+    ]
+    assert "total_debt: derived as sum of A + B (FY2020-FY2024, TTM)" in window_flags(
+        nf, 5, include_notes=True
+    )
+    assert len(window_flags(nf, 10)) == 5  # the 10-year window reaches FY2015-FY2016 again
+    # Structured flags render to exactly the legacy full-history list.
+    assert len(base.data_flags) == len(base.data_confidence_flags)
+    # Financials without structured flags fall back to the full list.
+    legacy = base.model_copy(update={"data_flags": []})
+    assert window_flags(legacy, 5) == base.data_confidence_flags

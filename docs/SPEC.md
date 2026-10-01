@@ -502,6 +502,7 @@ class NormalizedFinancials(BaseModel):
     reit_data: list[ReitSpecificLine] = []
     ep_data: list[EpSpecificLine] = []
     data_confidence_flags: list[str] = []            # e.g. "only 4 years available", "revenue jump FY23 (M&A?)"
+    data_flags: list[DataFlag] = []                  # same flags, structured (message, periods, scope, note)
     accession_number: str                            # latest filing this data reflects — drives the cache key
 
 class MarketSnapshot(BaseModel):
@@ -733,7 +734,7 @@ class EdgarClient:
 - **Restatements**: when a concept has multiple facts for the same `end` date, take the one with the latest `filed` date.
 - **Segments**: `companyfacts` doesn't carry dimensional (segment) data — pull it from the filing's XBRL frames or the SEC's Financial Statement and Notes dataset. This is the one piece of real XBRL-dimension parsing in the app; isolate it behind `segments.py` so it can be tested/iterated independently.
 - **Historical window trimming**: `normalize.py` returns the *full* pulled history; `classify/windows.py` decides how many years of it the engine actually uses (§5.4).
-- Every unmapped/derived value gets appended to `data_confidence_flags` on the `NormalizedFinancials`.
+- Every unmapped/derived value gets appended to `data_confidence_flags` on the `NormalizedFinancials`. The same flags are kept structured in `data_flags`; `window_flags(financials, years)` scopes them to the model's historical window (last N fiscal years + TTM) and leaves out methodology notes (exact derivations such as "total_debt: derived as sum of …", and unreported minority interest / preferred equity assumed 0). The valuation result, the classifier's confidence and the proposer prompt use the scoped list; the workbook's Historicals sheet keeps the full one. Data flags are not part of the classification reasons.
 
 ### 5.3 Market data (`backend/app/data/market/`)
 

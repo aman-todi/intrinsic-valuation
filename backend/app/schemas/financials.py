@@ -86,6 +86,15 @@ class EpSpecificLine(BaseModel):
     proved_reserves_gas_bcf: float | None
 
 
+class DataFlag(BaseModel):
+    """One normalizer flag, structured so it can be scoped to the model's historical window."""
+
+    message: str
+    periods: list[str] = []  # "FY2024", "TTM", ...: rendered in parentheses after the message
+    scope: list[str] = []  # periods that decide window relevance; empty = ``periods``; both empty = always
+    note: bool = False  # how a value was derived (methodology), not a data-quality concern
+
+
 class NormalizedFinancials(BaseModel):
     ticker: str
     cik: str
@@ -99,6 +108,8 @@ class NormalizedFinancials(BaseModel):
     reit_data: list[ReitSpecificLine] = []
     ep_data: list[EpSpecificLine] = []
     data_confidence_flags: list[str] = []  # e.g. "only 4 years available", "revenue jump FY23 (M&A?)"
+    # The same flags, structured (full pulled history); window_flags() scopes them to the model's window.
+    data_flags: list[DataFlag] = []
     accession_number: str  # latest filing this data reflects — drives the cache key
 
 

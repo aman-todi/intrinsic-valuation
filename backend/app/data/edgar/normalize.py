@@ -31,6 +31,7 @@ from app.schemas.financials import (
     BalanceSheetLine,
     BankSpecificLine,
     CashFlowLine,
+    DataFlag,
     EpSpecificLine,
     FiscalPeriod,
     IncomeStatementLine,
@@ -46,6 +47,8 @@ QUARTERLY_FORMS = frozenset({"10-Q", "10-Q/A"})
 ANNUAL_MIN_DAYS = 350
 ANNUAL_MAX_DAYS = 380
 REVENUE_JUMP_THRESHOLD = 0.5  # |YoY revenue change| above this gets a flag (M&A? restatement?)
+# Defaulting these to 0 when unreported is the normal case (most companies have none): a note, not a concern.
+ZERO_DEFAULT_IS_NORMAL = frozenset({"minority_interest", "preferred_equity"})
 MIN_YEARS_WITHOUT_FLAG = 5
 
 USD = "USD"
@@ -633,16 +636,70 @@ class _View:
 
 
 class _Flags:
-    def __init__(self) -> None:
-        self._groups: dict[str, list[str]] = {}
+    """Flags grouped by message. ``period`` is listed after the message; ``scope`` only decides which
+    windows the flag belongs to (for messages that already name their years); ``note`` marks
+    methodology notes (how a value was derived) as opposed to data-quality concerns."""
 
-    def add(self, msg: str, period: str | None = None) -> None:
-        periods = self._groups.setdefault(msg, [])
-        if period and period not in periods:
-            periods.append(period)
+    def __init__(self) -> None:
+        self._groups: dict[str, DataFlag] = {}
+
+    def add(
+        self, msg: str, period: str | None = None, *, scope: str | None = None, note: bool = False
+    ) -> None:
+        flag = self._groups.setdefault(msg, DataFlag(message=msg, note=note))
+        if period and period not in flag.periods:
+            flag.periods.append(period)
+        if scope and scope not in flag.scope:
+            flag.scope.append(scope)
 
     def render(self) -> list[str]:
-        return [f"{m} ({', '.join(p)})" if p else m for m, p in self._groups.items()]
+        return [_render_flag(f.message, f.periods) for f in self._groups.values()]
+
+    def structured(self) -> list[DataFlag]:
+        return [f.model_copy(deep=True) for f in self._groups.values()]
+
+
+def _render_flag(message: str, periods: list[str]) -> str:
+    return f"{message} ({_compact_periods(periods)})" if periods else message
+
+
+def _compact_periods(periods: list[str]) -> str:
+    """["FY2021", "FY2022", "FY2023", "TTM"] -> "FY2021-FY2023, TTM" (runs of 3+ consecutive years)."""
+    years = sorted(int(p[2:]) for p in periods if p.startswith("FY") and p[2:].isdigit())
+    parts: list[str] = []
+    i = 0
+    while i < len(years):
+        j = i
+        while j + 1 < len(years) and years[j + 1] == years[j] + 1:
+            j += 1
+        if j - i >= 2:
+            parts.append(f"FY{years[i]}-FY{years[j]}")
+        else:
+            parts.extend(f"FY{y}" for y in years[i : j + 1])
+        i = j + 1
+    parts.extend(p for p in periods if not (p.startswith("FY") and p[2:].isdigit()))
+    return ", ".join(parts)
+
+
+def window_flags(fin: NormalizedFinancials, window_years: int, *, include_notes: bool = False) -> list[str]:
+    """The data flags that concern the model's historical window: the last ``window_years`` fiscal
+    years plus TTM. Flags for older years are dropped and period lists are cut to the window.
+    Methodology notes are left out unless ``include_notes``. Financials without structured flags
+    (built before ``data_flags`` existed) fall back to the full list."""
+    if not fin.data_flags:
+        return list(fin.data_confidence_flags)
+    annual = [r.period for r in fin.income_statements if not r.period.is_ttm]
+    in_window = {f"FY{p.fiscal_year}" for p in annual[-window_years:]} if window_years > 0 else set()
+    in_window.add("TTM")
+    out: list[str] = []
+    for flag in fin.data_flags:
+        if flag.note and not include_notes:
+            continue
+        scope = flag.scope or flag.periods
+        if scope and not in_window.intersection(scope):
+            continue
+        out.append(_render_flag(flag.message, [p for p in flag.periods if p in in_window]))
+    return out
 
 
 class _Resolver:
@@ -658,7 +715,7 @@ class _Resolver:
         if val.tag in PROXY_TAGS:
             self.flags.add(f"{concept}: proxy tag {val.tag} ({PROXY_TAGS[val.tag]})", self.v.label)
         if val.note:
-            self.flags.add(f"{concept}: {val.note}", self.v.label)
+            self.flags.add(f"{concept}: {val.note}", self.v.label, note=True)
         return val
 
     def flow(self, concept: str, unit: str = USD) -> float | None:
@@ -675,12 +732,18 @@ class _Resolver:
 
     def default(self, concept: str, value: float | None, fallback: float = 0.0) -> float:
         if value is None:
-            self.flags.add(f"{concept}: not reported, assumed {fallback:g}", self.v.label)
+            self.flags.add(
+                f"{concept}: not reported, assumed {fallback:g}",
+                self.v.label,
+                note=concept in ZERO_DEFAULT_IS_NORMAL and fallback == 0,
+            )
             return fallback
         return value
 
-    def derived(self, concept: str, how: str) -> None:
-        self.flags.add(f"{concept}: derived as {how}", self.v.label)
+    def derived(self, concept: str, how: str, *, approximation: bool = False) -> None:
+        """Exact identities (gross profit = revenue - cogs) are methodology notes; approximations are
+        data-quality concerns and stay visible next to the valuation."""
+        self.flags.add(f"{concept}: derived as {how}", self.v.label, note=not approximation)
 
     def sum_flows(self, tags: Iterable[str]) -> tuple[float, list[str]] | None:
         total, used = 0.0, []
@@ -690,7 +753,7 @@ class _Resolver:
                 total += val.value
                 used.append(tag)
                 if val.note:
-                    self.flags.add(f"{tag}: {val.note}", self.v.label)
+                    self.flags.add(f"{tag}: {val.note}", self.v.label, note=True)
         return (total, used) if used else None
 
 
@@ -759,10 +822,14 @@ def _income_statement(r: _Resolver, financial: bool) -> IncomeStatementLine:
     if op is None:
         if financial:
             op = pretax
-            r.derived("operating_income", "pretax income (financial company, no operating income line)")
+            r.derived(
+                "operating_income",
+                "pretax income (financial company, no operating income line)",
+                approximation=True,
+            )
         else:
             op = pretax + interest
-            r.derived("operating_income", "pretax income + interest expense")
+            r.derived("operating_income", "pretax income + interest expense", approximation=True)
 
     shares = r.shares("diluted_shares")
     if shares is None:
@@ -771,7 +838,7 @@ def _income_statement(r: _Resolver, financial: bool) -> IncomeStatementLine:
         )
         if dei is not None:
             shares = dei.value
-            r.derived("diluted_shares", "cover-page shares outstanding (dei)")
+            r.derived("diluted_shares", "cover-page shares outstanding (dei)", approximation=True)
     shares = r.default("diluted_shares", shares)
 
     return IncomeStatementLine(
@@ -798,7 +865,7 @@ def _total_debt(r: _Resolver) -> float:
         if val is None:
             return None
         if val.note:
-            r.flags.add(f"total_debt: {val.note}", r.v.label)
+            r.flags.add(f"total_debt: {val.note}", r.v.label, note=True)
         parts[val.tag] = val.value
         return val.value
 
@@ -1063,10 +1130,11 @@ def _share_split_flags(rows: list[IncomeStatementLine], flags: _Flags) -> None:
         for n in (2, 3, 4, 5, 7, 8, 10, 20):
             if abs(ratio - n) <= 0.1 * n or abs(1 / ratio - n) <= 0.1 * n:
                 kind = f"{n}-for-1 split" if ratio > 1 else f"1-for-{n} reverse split"
+                cur_label = "TTM" if cur.period.is_ttm else f"FY{cur.period.fiscal_year}"
                 flags.add(
                     f"diluted_shares: possible {kind} between FY{prev.period.fiscal_year} and "
-                    f"{'TTM' if cur.period.is_ttm else f'FY{cur.period.fiscal_year}'}; "
-                    "earlier share counts are as originally reported (not split-adjusted)"
+                    f"{cur_label}; earlier share counts are as originally reported (not split-adjusted)",
+                    scope=cur_label,
                 )
                 break
 
@@ -1079,7 +1147,8 @@ def _revenue_jump_flags(rows: list[IncomeStatementLine], flags: _Flags) -> None:
             if abs(change) > REVENUE_JUMP_THRESHOLD:
                 flags.add(
                     f"revenue {'jump' if change > 0 else 'drop'} FY{cur.period.fiscal_year} "
-                    f"({change:+.0%} vs FY{prev.period.fiscal_year}; M&A, divestiture or restatement?)"
+                    f"({change:+.0%} vs FY{prev.period.fiscal_year}; M&A, divestiture or restatement?)",
+                    scope=f"FY{cur.period.fiscal_year}",
                 )
 
 
@@ -1172,6 +1241,7 @@ def normalize(
         reit_data=reit,
         ep_data=ep,
         data_confidence_flags=flags.render(),
+        data_flags=flags.structured(),
         accession_number=accession,
     )
 

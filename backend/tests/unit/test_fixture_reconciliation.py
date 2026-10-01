@@ -139,6 +139,8 @@ def test_classification_reconciles_with_edgar_fixtures() -> None:
         if r.recommended_model is not None:
             assert 0.05 <= r.confidence <= 0.99, ticker
             assert r.historical_window_years >= 3, ticker
+            # Data flags belong to the valuation result (window-scoped), not to "why this model".
+            assert not any(reason.startswith("data flag:") for reason in r.reasons), ticker
     assert mismatches == []
     nue = classified("NUE")
     assert nue.historical_window_years == 10 and "cyclical" in nue.window_reason

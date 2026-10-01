@@ -135,9 +135,14 @@ class S3Storage:
             import boto3
             from botocore.config import Config
 
-            # SigV4 presigned URLs (SigV2 is rejected by newer regions).
+            # SigV4 presigned URLs on the bucket's REGIONAL endpoint. Without endpoint_url boto3 presigns
+            # against the global s3.amazonaws.com host, which S3 treats as us-east-1 and rejects with
+            # AuthorizationQueryParametersError for a bucket in any other region.
             self._client = boto3.client(
-                "s3", region_name=self._region, config=Config(signature_version="s3v4")
+                "s3",
+                region_name=self._region,
+                endpoint_url=f"https://s3.{self._region}.amazonaws.com",
+                config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
             )
         return self._client
 

@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from app.classify.windows import annual_income_statements, historical_window_years
+from app.data.edgar.normalize import window_flags
 from app.schemas.company import ClassificationResult, CompanySnapshot, DeclineReason, ModelType
 from app.schemas.financials import IncomeStatementLine, NormalizedFinancials, SegmentLine
 
@@ -624,7 +625,8 @@ def build_result(
             reasons.append(why)
     if runner is not None:
         reasons.append(f"runner-up {runner.model}: {'; '.join(runner.reasons)}")
-    reasons.extend(f"data flag: {f}" for f in s.financials.data_confidence_flags)
+    # Data flags are not reasons for the choice: they are reported with the valuation result,
+    # scoped to the historical window. Only the in-window concerns lower the confidence.
     reasons.extend(extra_reasons or [])
 
     years, window_reason = historical_window_years(chosen, s.company.sic_code, s.financials)
@@ -635,7 +637,7 @@ def build_result(
             chosen_c.score,
             runner.score if runner else None,
             years,
-            len(s.financials.data_confidence_flags),
+            len(window_flags(s.financials, years)),
         )
     )
     return ClassificationResult(

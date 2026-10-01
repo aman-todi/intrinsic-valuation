@@ -21,6 +21,9 @@ frontend/playwright-report/
 *.tfstate
 *.tfstate.*
 *.tfvars
+# Saved plans embed a state snapshot (DB password, DATABASE_URL): never commit them.
+tfplan
+*.tfplan
 !*.tfvars.example
 infra/terraform/backend.hcl
 crash.log

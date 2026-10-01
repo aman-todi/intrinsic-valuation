@@ -40,6 +40,7 @@ from app.assumptions.historicals import (
     segment_has_operating_income,
     segment_names,
 )
+from app.data.edgar.normalize import window_flags
 from app.schemas.assumptions import (
     ASSUMPTION_SCHEMA_BY_MODEL,
     AssumptionField,
@@ -59,7 +60,7 @@ from app.schemas.macro import DamodaranIndustryData
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v2"  # v2: excess-return bounds text (cost_of_equity > g + 0.005)
+PROMPT_VERSION = "v3"  # v3: data flags scoped to the historical window; v2: excess-return bounds text
 MAX_REPAIR_ATTEMPTS = 3
 MAX_TOKENS = 4096  # 17 fields x (value + <=240-char rationale + source) needs more than 2048
 RATIONALE_MAX = 240
@@ -346,7 +347,7 @@ def build_prompt(
         market=market,
         industry=industry,
         anchors_block=anchors.render(),
-        flags=financials.data_confidence_flags,
+        flags=window_flags(financials, window_years),
         early_stage=early_stage and schema_cls in (FCFFAssumptions, FCFEAssumptions),
         extra=extra,
     )
@@ -389,7 +390,7 @@ def build_segment_prompt(
         market=market,
         industry=industry,
         anchors_block=anchors_block,
-        flags=financials.data_confidence_flags,
+        flags=window_flags(financials, window_years),
         early_stage=False,
         extra=extra,
     )

@@ -382,10 +382,6 @@ def _implied_pb(financials: NormalizedFinancials, equity_value: float) -> float 
     return equity_value / book if book > 0 else None
 
 
-def _assumption_sources(a) -> list[str]:
-    return [f"Assumption {name} = {field.value:.6g} ({field.source.value})" for name, field in a]
-
-
 def _data_sources(financials: NormalizedFinancials, market: MarketSnapshot) -> list[str]:
     base = financials.income_statements[-1]
     period = "TTM" if base.period.is_ttm else f"FY{base.period.fiscal_year}"
@@ -470,7 +466,6 @@ class FCFFValuator(Valuator):
             sources.append(note)
             flags.append(note)
         sources.append(f"WACC {inp.discount_rate:.4%} (ke {cost_of_equity(assumptions):.4%})")
-        sources += _assumption_sources(assumptions)
 
         scenarios, s_flags = self.scenarios_with_flags(
             financials, market, assumptions, historical_window_years
@@ -754,7 +749,6 @@ class FCFEValuator(Valuator):
             + (" (fallback)" if s2c.used_fallback else "")
         )
         sources.append(f"Cost of equity {inp.discount_rate:.4%}")
-        sources += _assumption_sources(assumptions)
 
         scenarios, s_flags = self.scenarios_with_flags(
             financials, market, assumptions, historical_window_years

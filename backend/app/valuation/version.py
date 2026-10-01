@@ -3,4 +3,4 @@
 Bump manually whenever any valuator's math changes.
 """
 
-ENGINE_VERSION = "v1"
+ENGINE_VERSION = "v2"  # v2: data flags scoped to the window; sources list data sources only

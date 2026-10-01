@@ -28,7 +28,7 @@ from app.assumptions.proposer import PROMPT_VERSION
 from app.classify.rules import is_early_stage
 from app.classify.windows import historical_window_years
 from app.data.demo import DEMO_DATA_FLAG
-from app.data.edgar.normalize import sic
+from app.data.edgar.normalize import sic, window_flags
 from app.db.models import CachedModel
 from app.export.pdf.builder import build_pdf
 from app.export.pdf.narrative import narrative_or_fallback
@@ -380,8 +380,13 @@ async def _pipeline(
     )
     assumptions = ASSUMPTION_SCHEMA_BY_MODEL[mt].model_validate(view.final_assumptions)
     valuator = get_valuator(mt)
+    # The result carries only the data-quality flags for the model's window (the workbook's
+    # Historicals sheet keeps the full list for the full pulled history).
+    model_financials = company.financials.model_copy(
+        update={"data_confidence_flags": window_flags(company.financials, view.window_years)}
+    )
     result: ValuationResult = await asyncio.to_thread(
-        valuator.compute, company.financials, market.snapshot, assumptions, view.window_years
+        valuator.compute, model_financials, market.snapshot, assumptions, view.window_years
     )
     result = result.model_copy(
         update={"data_confidence_flags": _dedupe([*result.data_confidence_flags, *flags])}
