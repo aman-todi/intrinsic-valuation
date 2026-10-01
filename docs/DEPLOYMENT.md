@@ -33,7 +33,7 @@ Use the [order of operations](#order-of-operations) table to move between the tw
 |---|---|---|
 | Compute | **One EC2 `t4g.small`** (2 vCPU burstable, 2 GB RAM, plus a 2 GB swapfile), arm64 | About $12/month. The whole backend (api, worker, redis, caddy) fits. `t4g.medium` (4 GB) is the upgrade path, [below](#upgrade-the-instance). There is no high availability: a host failure is auto-recovered by EC2, and a deploy restarts the containers, which takes a few seconds. |
 | Database | **RDS for PostgreSQL 17**, `db.t4g.micro`, 20 GB gp3 (autoscaling to 50 GB), single-AZ, encrypted, not publicly accessible, TLS forced | About $14/month. Managed backups (7 days, point-in-time restore), minor-version patching and storage autoscaling. The only way in is from the app instance's security group; humans connect through an [SSM port forward](#connect-to-the-database). The cheaper alternative, Postgres in a container on the EC2 box (≈ $0 extra, but you own backups, upgrades and disk), is [described but not implemented](#cheaper-alternative-postgres-on-the-box). |
-| Auth | **Cognito user pool** (Essentials tier) with **managed login v2**, public app client, Authorization Code + PKCE | No auth UI to build or host. Invite-only by default. Password sign-in, optional passwordless email codes, optional TOTP MFA. The API validates Cognito **access tokens** (issuer, signature via JWKS, `token_use=access`, `client_id`). Free for up to 10,000 monthly active users on Essentials at the time of writing ([cost](#monthly-cost)). |
+| Auth | **Cognito user pool** (Essentials tier) with **managed login v2**, public app client, Authorization Code + PKCE | No auth UI to build or host. Open sign-up with email verification by default; invite-only with `cognito_allow_self_signup = false`. Password sign-in, optional passwordless email codes, optional TOTP MFA. The API validates Cognito **access tokens** (issuer, signature via JWKS, `token_use=access`, `client_id`). Free for up to 10,000 monthly active users on Essentials at the time of writing ([cost](#monthly-cost)). |
 | Frontend | **Vercel** (Hobby tier) | Free for personal, non-commercial use, and it gives HTTPS, previews and git-push deploys. The browser calls the API cross-origin, so the API allows the Vercel origin(s) through `CORS_ORIGINS`. |
 | HTTPS for the API | **Caddy** with automatic Let's Encrypt | Caddy needs no load balancer and no certificate management. Without a domain, the hostname is `<eip-with-dashes>.sslip.io`, a public wildcard DNS name that resolves to the Elastic IP. A custom domain is [optional](#a7-custom-domains-optional). |
 | Artifacts | **S3**, accessed with the **instance role** | There are no static keys. `models/` and `runs/` expire after 35 days. |
@@ -83,7 +83,15 @@ What lives where:
 
 ## A1. Prerequisites
 
-1. **AWS account.** Sign in with IAM Identity Center or an admin profile (`aws configure sso`). Never use root keys. The resources here cost about **$33–35/month** ([cost table](#monthly-cost)). New accounts on the credit-based Free Plan draw the credit down. EC2, RDS, EBS and public IPv4 are not Always-Free.
+1. **AWS project.** The stack runs in an AWS project (the new AWS experience, managed in [AWS Settings](https://settings.aws.com/)), in the project's **selected Region**, which is `us-east-2` (US East, Ohio) for this app. Every Regional resource must live there; confirm it in **AWS Settings → View all projects → Overview → Additional Info → Region**. Sign in with `aws login` (the CLI profile's `region` must be the selected Region) and check the plan with `aws freetier get-account-plan-state`. Every service used here (EC2, EBS, VPC, RDS, Cognito, ECR, S3, Systems Manager, IAM, KMS, CloudWatch, Budgets) is in the Free Tier service list, and `t4g.small` / `db.t4g.micro` are Free-plan instance types. The resources cost about **$33–35/month** ([cost table](#monthly-cost)): on the Free plan that draws down the credits (EC2, RDS, EBS and public IPv4 are not always-free), so upgrade to the Paid plan in **AWS Settings → Billing** before the credits run out, and set a spend limit there. If calls that used to work suddenly return `AccessDenied`, check whether a spend limit has paused the project.
+   - Terraform does not read `aws login` sessions directly. Add a profile that refreshes credentials from the login session, and use it (`export AWS_PROFILE=tf AWS_REGION=us-east-2`) in every shell that runs Terraform or the scripts:
+     ```ini
+     # ~/.aws/config
+     [profile tf]
+     region = us-east-2
+     credential_process = aws configure export-credentials --profile default --format process
+     ```
+     A one-off `eval "$(aws configure export-credentials --format env)"` also works, but those credentials expire after about 15 minutes, which is shorter than the RDS creation in `terraform apply`.
 2. **Budget.** Terraform creates a monthly budget of **$45** (`monthly_budget_usd`), which alerts `alert_email` at 80% and 100% of actual spend and at 100% of forecast. Optionally, turn on Cost Anomaly Detection in the console. It is free.
 3. **Local tools** on the machine that runs Terraform and the scripts:
    - Terraform **≥ 1.10** (tested with 1.16)
@@ -110,14 +118,14 @@ Run `cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvar
 
 | Variable | Value |
 |---|---|
-| `aws_region` | `us-east-1` (default). EC2, RDS and Cognito all live here |
+| `aws_region` | `us-east-2` (default): the AWS project's selected Region. EC2, RDS and Cognito all live here |
 | `github_owner` / `github_repo` | for example `aman-todi` / `intrinsic-valuation`. Only `refs/heads/main` of this repo can assume the deploy role |
 | `alert_email` | budget alerts and the Let's Encrypt contact |
 | `frontend_origins` | `[]` for now. After [A4](#a4-vercel-frontend), `["https://<your-app>.vercel.app"]`. This **one list** feeds the API's `CORS_ORIGINS` **and** the Cognito app client's callback URLs (`<origin>/auth/callback`) and sign-out URLs (`<origin>/`). Exact origins, `https://`, no trailing slash, no wildcards. (It replaces the former `cors_origins` variable; rename it in an existing `terraform.tfvars`.) |
 | `cognito_allow_self_signup` | `true` (default): anyone can create an account on the managed login page (email + password, verified by an emailed code). `false`: invite-only, users are created by you ([A6](#a6-users-cognito)) |
 | `cognito_email_otp_enabled` | `true` (default): the sign-in page offers "email me a code" next to the password. Every code is an email and counts toward the [50 emails/day](#email-sending-limits) limit; set `false` for password-only |
 | `cognito_localhost_callbacks` | `true` (default): also allows `http://localhost:3000/auth/callback` and `http://localhost:3000/`, so a local frontend can sign in against this pool. Set `false` to lock the pool to the deployed origins |
-| `cognito_domain_prefix` | optional; empty = `dcf-<random hex>` → `https://dcf-1a2b3c4d.auth.us-east-1.amazoncognito.com` |
+| `cognito_domain_prefix` | optional; empty = `dcf-<random hex>` → `https://dcf-1a2b3c4d.auth.us-east-2.amazoncognito.com` |
 | `db_instance_class` / `db_engine_version` | `db.t4g.micro` / `17` (defaults). `17` = the region's default 17.x minor, with automatic minor upgrades |
 | `db_deletion_protection`, `cognito_deletion_protection` | `true` (defaults). Set `false` and apply only right before a [teardown](#teardown) |
 | `domain_name` | optional; empty = `<eip>.sslip.io` |
@@ -135,9 +143,9 @@ terraform -chdir=infra/terraform output vercel_env
 # {
 #   NEXT_PUBLIC_API_BASE_URL         = "https://3-91-20-7.sslip.io"
 #   NEXT_PUBLIC_COGNITO_CLIENT_ID    = "4abc…"
-#   NEXT_PUBLIC_COGNITO_DOMAIN       = "https://dcf-1a2b3c4d.auth.us-east-1.amazoncognito.com"
-#   NEXT_PUBLIC_COGNITO_REGION       = "us-east-1"
-#   NEXT_PUBLIC_COGNITO_USER_POOL_ID = "us-east-1_AbCdEf123"
+#   NEXT_PUBLIC_COGNITO_DOMAIN       = "https://dcf-1a2b3c4d.auth.us-east-2.amazoncognito.com"
+#   NEXT_PUBLIC_COGNITO_REGION       = "us-east-2"
+#   NEXT_PUBLIC_COGNITO_USER_POOL_ID = "us-east-2_AbCdEf123"
 # }
 ```
 
@@ -172,7 +180,7 @@ Go to **Settings → Secrets and variables → Actions**.
 |---|---|---|
 | Secret | `AWS_DEPLOY_ROLE_ARN` | `terraform output -raw github_deploy_role_arn` |
 | Variable | `DEPLOY_ENABLED` | `true`. While unset, `deploy.yml` only posts a notice, so `main` stays green |
-| Variable | `AWS_REGION` | optional, default `us-east-1`. Must match `aws_region` |
+| Variable | `AWS_REGION` | `us-east-2`. Must match `aws_region` (the workflow falls back to `us-east-2` when unset) |
 | Variable | `ARM_RUNNER` | optional, default `ubuntu-24.04-arm` (native arm64 GitHub-hosted runner). If arm64 hosted runners are not available for this repository or plan, so the job never starts, set it to `ubuntu-latest`. The images are then built under QEMU emulation, which is slower |
 
 The workflow needs nothing else. It reads the instance id, bucket and registry from SSM `/dcf/prod/config/*`, which Terraform writes. The frontend's `NEXT_PUBLIC_*` values live in Vercel, not in GitHub.
@@ -240,7 +248,7 @@ The pool sends email with Cognito's built-in sender (`COGNITO_DEFAULT`, from `no
 
 ## B1. Terraform
 
-All commands run in `infra/terraform/`, with admin credentials in your shell (`aws sts get-caller-identity` to confirm).
+All commands run in `infra/terraform/`, with the project's credentials in your shell (`export AWS_PROFILE=tf AWS_REGION=us-east-2`, see [A1](#a1-prerequisites); `aws sts get-caller-identity` to confirm).
 
 ```bash
 # 4a. State bucket (once per account). It uses local state, which is git-ignored, and the bucket has prevent_destroy.
@@ -257,8 +265,6 @@ terraform output                           # api_url, vercel_env, cognito_*, rds
 ```
 
 Commit the generated `infra/terraform/.terraform.lock.hcl` so every machine uses the same provider builds. If the account already has a GitHub OIDC provider, set `github_oidc_provider_arn`, because an account can only have one.
-
-> **Coming from the earlier Supabase-based setup?** If `put_ssm_params.sh` once wrote `/dcf/prod/DATABASE_URL`, the first apply fails with `ParameterAlreadyExists`. Delete it first (`aws ssm delete-parameter --name /dcf/prod/DATABASE_URL`) or adopt it (`terraform import aws_ssm_parameter.database_url /dcf/prod/DATABASE_URL`; the next apply overwrites the value). Remove the other leftovers with `infra/scripts/put_ssm_params.sh --delete-legacy`. There is no automatic data or user migration: RDS starts empty (the first deploy runs the migrations), and Cognito users are new identities.
 
 What it creates (prefix `dcf`):
 
@@ -290,7 +296,6 @@ Useful outputs: `vercel_env` (all five `NEXT_PUBLIC_*` values), `cognito_domain_
 ```bash
 infra/scripts/put_ssm_params.sh --dry-run    # validates .env, writes nothing
 infra/scripts/put_ssm_params.sh              # uses the same region as Terraform (AWS_REGION or aws configure)
-infra/scripts/put_ssm_params.sh --delete-legacy   # also removes old SUPABASE_* / DATABASE_POOLER_URL parameters
 ```
 
 It writes only the owner-supplied values, under `/dcf/prod/`:
@@ -342,7 +347,7 @@ The script refuses a dirty working tree unless `ALLOW_DIRTY=true`.
 
 On the box, `deploy_remote.sh` does the following:
 1. It installs the shipped files to `/opt/dcf/`: `docker-compose.prod.yml`, `caddy/Caddyfile`, and `deploy.sh`, which is itself.
-2. It **renders `/opt/dcf/.env`** (0600) from every parameter under `/dcf/prod`. The Terraform `config/*` values win on a name clash. It adds `IMAGE_TAG=<sha>`. It refuses to continue if a required key is missing: `DATABASE_URL`, `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`, `ANTHROPIC_API_KEY`, `FRED_API_KEY`, `SEC_EDGAR_USER_AGENT`, and the Terraform config (`APP_DOMAIN`, `PUBLIC_API_BASE_URL`, `ACME_EMAIL`, `AWS_REGION`, `S3_BUCKET_NAME`, `ECR_REGISTRY`). Unrecognized legacy parameters are skipped with a warning.
+2. It **renders `/opt/dcf/.env`** (0600) from every parameter under `/dcf/prod`. The Terraform `config/*` values win on a name clash. It adds `IMAGE_TAG=<sha>`. It refuses to continue if a required key is missing: `DATABASE_URL`, `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`, `ANTHROPIC_API_KEY`, `FRED_API_KEY`, `SEC_EDGAR_USER_AGENT`, and the Terraform config (`APP_DOMAIN`, `PUBLIC_API_BASE_URL`, `ACME_EMAIL`, `AWS_REGION`, `S3_BUCKET_NAME`, `ECR_REGISTRY`).
 3. It logs in to ECR, then runs `docker compose pull`.
 4. It runs **`alembic upgrade head`** in a one-off container of the **new** api image (`docker compose run --rm --no-deps api …`), against RDS over TLS. **If that fails, it aborts**: the previous `.env` is restored and the running containers are not touched.
 5. It runs `docker compose up -d --remove-orphans`, which recreates the containers whose image or env changed. It reloads Caddy if the Caddyfile changed.
@@ -489,7 +494,7 @@ The database scales the same way: `db_instance_class = "db.t4g.small"` (≈ +$12
 
 # Monthly cost
 
-This estimate is for on-demand pricing in us-east-1, running 730 hours a month, with low traffic. Check current prices before you commit.
+This estimate is for on-demand pricing in us-east-2, running 730 hours a month, with low traffic. Check current prices before you commit.
 
 | Item | Size | ≈ $/month |
 |---|---|---|
@@ -514,7 +519,6 @@ This estimate is for on-demand pricing in us-east-1, running 730 hours a month, 
 | Vercel Hobby (personal, non-commercial) · FRED / EDGAR / Damodaran | | 0 |
 | Anthropic | per token | usage-based; set a spend limit |
 
-For comparison, the previous ECS Fargate + ALB design cost about $70–100/month.
 
 ### Cheaper alternative: Postgres on the box
 

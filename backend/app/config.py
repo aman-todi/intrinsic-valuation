@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", "../.env"), extra="ignore")
 
     # Auth: AWS Cognito user pool. The API accepts access tokens issued to COGNITO_APP_CLIENT_ID.
-    COGNITO_REGION: str = "us-east-1"
+    COGNITO_REGION: str = "us-east-2"
     COGNITO_USER_POOL_ID: str = ""
     COGNITO_APP_CLIENT_ID: str = ""
 
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     FRED_API_KEY: str = ""
 
     # AWS
-    AWS_REGION: str = "us-east-1"
+    AWS_REGION: str = "us-east-2"
     S3_BUCKET_NAME: str = "dcf-app-artifacts"
 
     # App/runtime

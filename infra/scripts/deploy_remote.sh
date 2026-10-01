@@ -95,14 +95,6 @@ required = [
     "ANTHROPIC_API_KEY", "FRED_API_KEY", "SEC_EDGAR_USER_AGENT",
     "APP_DOMAIN", "PUBLIC_API_BASE_URL", "ACME_EMAIL", "AWS_REGION", "S3_BUCKET_NAME", "ECR_REGISTRY",
 ]
-# Pre-RDS/Cognito leftovers: not rendered (put_ssm_params.sh --delete-legacy removes them from SSM).
-legacy = ["SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "DATABASE_POOLER_URL"]
-stale = [k for k in legacy if k in env]
-for k in stale:
-    del env[k]
-if stale:
-    print(f"WARNING: ignoring legacy SSM parameters {', '.join(stale)} "
-          "(delete them: infra/scripts/put_ssm_params.sh --delete-legacy)", file=sys.stderr)
 missing = [k for k in required if not env.get(k)]
 if env.get("DATABASE_URL") and not env["DATABASE_URL"].startswith("postgresql+psycopg://"):
     print("DATABASE_URL must start with postgresql+psycopg:// (it is written by Terraform)", file=sys.stderr)

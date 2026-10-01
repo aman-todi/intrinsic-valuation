@@ -10,12 +10,10 @@
 # via --cli-input-json, so they don't show up in `ps`), and .env.example placeholders are refused.
 # Re-running overwrites (new parameter version); redeploy afterwards to pick the values up.
 #
-# Usage: infra/scripts/put_ssm_params.sh [--env-file PATH] [--delete-legacy] [--dry-run]
+# Usage: infra/scripts/put_ssm_params.sh [--env-file PATH] [--dry-run]
 #   --env-file PATH   default: <repo>/.env
-#   --delete-legacy   also delete the pre-RDS/Cognito parameters (SUPABASE_URL, SUPABASE_ANON_KEY,
-#                     SUPABASE_SERVICE_ROLE_KEY, DATABASE_POOLER_URL) if they still exist
 #   --dry-run         validate and list the keys that would be written; write nothing.
-# Env: AWS_REGION (default: aws configure / us-east-1), PROJECT (dcf).
+# Env: AWS_REGION (default: aws configure / us-east-2), PROJECT (dcf).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -29,8 +27,6 @@ SECRET_KEYS=(ANTHROPIC_API_KEY FRED_API_KEY)
 PLAIN_KEYS=(SEC_EDGAR_USER_AGENT ANTHROPIC_MODEL)
 # Owned by Terraform: this script must never write them, even if .env has a (local) value.
 TERRAFORM_KEYS=(DATABASE_URL COGNITO_REGION COGNITO_USER_POOL_ID COGNITO_APP_CLIENT_ID CORS_ORIGINS)
-# Left over from the Supabase setup; removed by --delete-legacy.
-LEGACY_KEYS=(SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY DATABASE_POOLER_URL)
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 ok() { printf '    \033[32mok\033[0m %s\n' "$*" >&2; }
@@ -40,7 +36,6 @@ die() {
 }
 
 ENV_FILE="${REPO_ROOT}/.env"
-DELETE_LEGACY=0
 DRY_RUN=0
 while (($#)); do
   case "$1" in
@@ -48,16 +43,12 @@ while (($#)); do
       ENV_FILE="${2:?--env-file needs a path}"
       shift 2
       ;;
-    --delete-legacy)
-      DELETE_LEGACY=1
-      shift
-      ;;
     --dry-run)
       DRY_RUN=1
       shift
       ;;
     -h | --help)
-      sed -n '2,18p' "$0"
+      sed -n '2,16p' "$0"
       exit 0
       ;;
     *) die "unknown argument: $1" ;;
@@ -77,7 +68,7 @@ if ((!DRY_RUN)); then
   command -v aws >/dev/null || die "aws CLI v2 is required"
   export AWS_PAGER=""
   AWS_REGION="${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}"
-  AWS_REGION="${AWS_REGION:-us-east-1}"
+  AWS_REGION="${AWS_REGION:-us-east-2}"
   export AWS_REGION AWS_DEFAULT_REGION="${AWS_REGION}"
   account="$(aws sts get-caller-identity --query Account --output text)" || die "AWS credentials not working"
   log "Account ${account}, region ${AWS_REGION}"
@@ -157,14 +148,4 @@ for k in "${SECRET_KEYS[@]}" "${PLAIN_KEYS[@]}"; do
   fi
 done
 
-if ((DELETE_LEGACY)); then
-  names=()
-  for k in "${LEGACY_KEYS[@]}"; do names+=("${SSM_PREFIX}/${k}"); done
-  if ((DRY_RUN)); then
-    ok "would delete (if present): ${names[*]}"
-  else
-    aws ssm delete-parameters --names "${names[@]}" --query 'DeletedParameters' --output text |
-      tr '\t' '\n' | sed '/^$/d; s/^/    deleted /' >&2
-  fi
-fi
 log "Done. Redeploy (push to main, or infra/scripts/deploy.sh) so the host re-renders /opt/dcf/.env."

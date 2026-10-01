@@ -18,6 +18,9 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/postgres
+      # Docker Desktop on Apple M4/M5 advertises SME/SVE to the VM; OpenSSL bundled in `cryptography`
+      # then dies with SIGILL on import. Local only: Graviton (production) has neither feature.
+      - OPENSSL_armcap=0
     ports: ["8000:8000"]
     depends_on: [db, redis]
   worker:
@@ -26,6 +29,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/postgres
+      - OPENSSL_armcap=0 # see api
     init: true
     stop_grace_period: 90s # > WORKER_SHUTDOWN_GRACE_SECONDS (60)
     depends_on: [db, redis]

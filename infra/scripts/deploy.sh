@@ -10,7 +10,7 @@
 #      (render .env from SSM, pull, migrate, up -d, health check) and stream back its output
 #
 # Usage: infra/scripts/deploy.sh [--tag SHA] [--skip-build] [--skip-migrations] [--force-build]
-# Env:   AWS_REGION (default: aws configure / us-east-1), PROJECT (dcf), ALLOW_DIRTY (false),
+# Env:   AWS_REGION (default: aws configure / us-east-2), PROJECT (dcf), ALLOW_DIRTY (false),
 #        DEPLOY_TIMEOUT_SECONDS (1800)
 # Needs: aws CLI v2, python3, tar, git; docker with buildx for builds (QEMU/binfmt on x86 hosts;
 #        Apple Silicon builds arm64 natively).
@@ -65,7 +65,7 @@ done
 require_cmd aws python3 tar git
 export AWS_PAGER=""
 AWS_REGION="${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}"
-AWS_REGION="${AWS_REGION:-us-east-1}"
+AWS_REGION="${AWS_REGION:-us-east-2}"
 export AWS_REGION AWS_DEFAULT_REGION="${AWS_REGION}"
 
 cd "${REPO_ROOT}"

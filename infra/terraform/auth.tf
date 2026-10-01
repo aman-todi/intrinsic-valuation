@@ -84,8 +84,8 @@ resource "aws_cognito_user_pool" "main" {
     email_sending_account = "COGNITO_DEFAULT"
   }
 
-  # Invite-only by default: users are created by an admin (aws cognito-idp admin-create-user or the
-  # console) and receive a temporary password by email.
+  # Open self sign-up by default (email verified by code). cognito_allow_self_signup = false makes the pool
+  # invite-only: users are created by an admin (admin-create-user or the console) with a temporary password.
   admin_create_user_config {
     allow_admin_create_user_only = var.cognito_allow_self_signup ? false : true
 

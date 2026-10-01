@@ -1,13 +1,19 @@
 # Testing and CI
 
-How the test suite is organized, how to run it locally, and what CI enforces (SPEC §13, §15 Ticket 14).
+How the test suite is organized, how to run it locally, and what CI enforces (SPEC §13).
 
-The suite is deliberately small: **161 tests** (backend 136 = 93 unit + 43 integration; frontend 20
-Vitest + 5 Playwright), each parametrized case counted as one test. The rule is one or two strong tests
-per behavior (pinned hand-computed regressions, real LibreOffice / WeasyPrint / Postgres / Redis where it
-matters) rather than many near-duplicates. Table-driven loops inside one test are used where the rows are
-one logical check (the 20-ticker reconciliation, bounds rules per family, the SIC map). When adding a
-test, prefer extending an existing table or strengthening an existing test over adding a new one.
+| Layer | Tests |
+|---|---|
+| Backend unit | 93 |
+| Backend integration | 43 |
+| Frontend Vitest | 20 |
+| Frontend Playwright | 5 |
+
+Each parametrized case counts as one test. The convention is one or two strong tests per behavior
+(pinned hand-computed regressions, real LibreOffice / WeasyPrint / Postgres / Redis where it matters),
+with table-driven loops where the rows are one logical check (the 20-ticker reconciliation, bounds rules
+per family, the SIC map). When adding a test, prefer extending an existing table or strengthening an
+existing test over adding a near-duplicate.
 
 ## Backend (`backend/tests/`)
 
@@ -31,7 +37,7 @@ Run one layer at a time:
 | Layer | Where | Needs |
 |---|---|---|
 | Unit | `tests/unit/` | nothing: no network, no DB. External HTTP is mocked with `respx`; the Anthropic client is a fake. |
-| Integration | `tests/integration/` (auto-marked `integration`) | Postgres 16 + Redis. `TEST_DATABASE_URL` / `TEST_REDIS_URL` if set, otherwise the conftest starts a throwaway cluster from `/usr/lib/postgresql/16/bin` and a `redis-server` on free ports, and skips cleanly if neither is available. `alembic upgrade head` runs first. `soffice` (LibreOffice Calc) and the WeasyPrint libraries make the Excel-recalc and PDF tests run for real; without `soffice` the recalc test skips with a message. |
+| Integration | `tests/integration/` (auto-marked `integration`) | Postgres 16 + Redis. `TEST_DATABASE_URL` / `TEST_REDIS_URL` if set, otherwise the conftest starts a throwaway cluster from `/usr/lib/postgresql/16/bin` and a `redis-server` on free ports, and skips cleanly if neither is available. On macOS the simplest setup is two containers: `docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=postgres postgres:16` and `docker run -d --rm -p 56379:6379 redis:7-alpine`, then `TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:55432/postgres TEST_REDIS_URL=redis://localhost:56379`. `alembic upgrade head` runs first. `soffice` (LibreOffice Calc) and the WeasyPrint libraries make the Excel-recalc and PDF tests run for real; without `soffice` the recalc test skips with a message. |
 
 ### What is covered
 
@@ -76,18 +82,13 @@ mismatches between the normalizer and the engines.
 
 ### Coverage gates
 
-| Scope | Gate | Full suite (810 tests) | Slim suite (136 tests) |
-|---|---|---|---|
-| overall `app` | `--cov-fail-under=75` | 95.7% | 90.7% |
-| `app/valuation/*` | ≥ 85% (`scripts/check_coverage.sh`) | 99.0% | 93.5% |
-| `app/classify/*` | not gated | 99.8% | 91.9% |
-| `app/assumptions/*` | not gated | 97.7% | 95.7% |
-| `app/export/*` | not gated | 96.9% | 94.6% |
-| `app/jobs/*` | not gated | 90.9% | 85.0% |
-| `app/api/*` | not gated | 85.6% | 84.0% |
+| Scope | Gate |
+|---|---|
+| overall `app` | `--cov-fail-under=75` (pytest) |
+| `app/valuation/*` | ≥ 85% (`scripts/check_coverage.sh`) |
 
-The floors are set well below the measured values on purpose: they catch a large untested area
-landing, not a single uncovered branch. `scripts/check_coverage.sh` reads the `.coverage` file that
+The floors sit below the measured coverage on purpose: they catch a large untested area landing, not a
+single uncovered branch. `scripts/check_coverage.sh` reads the `.coverage` file that
 `pytest --cov=app` writes. Coverage runs with `concurrency = ["thread", "greenlet"]`
 (`pyproject.toml`), because SQLAlchemy's asyncio layer runs ORM code in greenlets, and route or job
 code reached through it would otherwise be under-reported. Never lower a floor to get a PR through.

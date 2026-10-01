@@ -1,8 +1,8 @@
 # ---------- general ----------
 variable "aws_region" {
-  description = "AWS region for everything (EC2, RDS, Cognito, S3, ECR, SSM)."
+  description = "AWS region for everything (EC2, RDS, Cognito, S3, ECR, SSM): the AWS project's selected Region."
   type        = string
-  default     = "us-east-1"
+  default     = "us-east-2"
 }
 
 variable "project" {

@@ -1454,7 +1454,7 @@ State lives in an S3 bucket created once by `infra/terraform/bootstrap/` (versio
 - **Budget**: `aws_budgets_budget` (default $45/month) emailing at 80%/100% actual and 100% forecast.
 - **Outputs**: `api_url`, `api_domain`, `elastic_ip`, `instance_id`, SSM session and DB port-forward commands, ECR URLs, bucket name, `github_deploy_role_arn`, `frontend_origins`, Cognito (`cognito_domain_url`, `cognito_client_id`, `cognito_user_pool_id`, `cognito_region`) and `vercel_env` (all five `NEXT_PUBLIC_*` values), `rds_endpoint`.
 
-Approximate monthly cost (us-east-1, on-demand): EC2 `t4g.small` ≈ $12.30, 30 GB gp3 ≈ $2.40, public IPv4 ≈ $3.65, RDS `db.t4g.micro` ≈ $11.70 + 20 GB gp3 ≈ $2.30 (backups within the free allowance), S3/ECR/data transfer < $1 — **≈ $33–35/month**; Cognito Essentials costs nothing at this user count; `t4g.medium` for the app host adds ≈ $12. Vercel Hobby: $0 (non-commercial use).
+Approximate monthly cost (us-east-2, on-demand): EC2 `t4g.small` ≈ $12.30, 30 GB gp3 ≈ $2.40, public IPv4 ≈ $3.65, RDS `db.t4g.micro` ≈ $11.70 + 20 GB gp3 ≈ $2.30 (backups within the free allowance), S3/ECR/data transfer < $1 — **≈ $33–35/month**; Cognito Essentials costs nothing at this user count; `t4g.medium` for the app host adds ≈ $12. Vercel Hobby: $0 (non-commercial use).
 
 ### 11.4 Deploy flow
 
@@ -1494,8 +1494,8 @@ Every value below is a placeholder; nothing here is a real credential. The runbo
 # ---------- Auth (AWS Cognito) ----------
 # The API accepts Cognito ACCESS tokens issued by this user pool to this app client (RS256, verified
 # against https://cognito-idp.<region>.amazonaws.com/<pool id>/.well-known/jwks.json).
-COGNITO_REGION=us-east-1
-COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
+COGNITO_REGION=us-east-2
+COGNITO_USER_POOL_ID=us-east-2_XXXXXXXXX
 COGNITO_APP_CLIENT_ID=your-app-client-id
 
 # ---------- Postgres ----------
@@ -1518,7 +1518,7 @@ SEC_EDGAR_USER_AGENT="DCF-Valuation-App aman.todi01@gmail.com"
 FRED_API_KEY=your-fred-api-key
 
 # ---------- AWS ----------
-AWS_REGION=us-east-1
+AWS_REGION=us-east-2
 AWS_ACCESS_KEY_ID=your-access-key-id          # local dev only; the EC2 host uses its instance role instead
 AWS_SECRET_ACCESS_KEY=your-secret-access-key  # local dev only
 S3_BUCKET_NAME=dcf-app-artifacts   # production: set by Terraform (dcf-app-artifacts-<account-id>)
@@ -1533,10 +1533,10 @@ LOG_LEVEL=INFO
 
 # ---------- Frontend (Next.js) ----------
 # Leave NEXT_PUBLIC_COGNITO_CLIENT_ID empty for the dev auth bypass (see DEV_AUTH_BYPASS below).
-NEXT_PUBLIC_COGNITO_DOMAIN=https://your-domain-prefix.auth.us-east-1.amazoncognito.com
+NEXT_PUBLIC_COGNITO_DOMAIN=https://your-domain-prefix.auth.us-east-2.amazoncognito.com
 NEXT_PUBLIC_COGNITO_CLIENT_ID=your-app-client-id
-NEXT_PUBLIC_COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
-NEXT_PUBLIC_COGNITO_REGION=us-east-1
+NEXT_PUBLIC_COGNITO_USER_POOL_ID=us-east-2_XXXXXXXXX
+NEXT_PUBLIC_COGNITO_REGION=us-east-2
 # Production (Vercel): https://<api host> from `terraform output api_url`.
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 
@@ -1602,7 +1602,7 @@ The suite is deliberately lean: **≤ 200 tests in total** (backend + frontend, 
 
 ### 13.2 Frontend (`frontend/tests/`)
 
-- **Unit/component (Vitest + RTL)**: `assumptions-form.test.tsx` (read-only vs. editable, edits stored as decimals, client-side bound warnings, SOTP read-only), `active-run-guard.test.tsx` (locks while classifying/proposing/building, unlocks on `awaiting_confirm`, cross-tab), `model-confirm-card.test.tsx`, `format.test.ts` (formatting, run-status and bound helpers).
+- **Unit/component (Vitest + RTL)**: `auth.test.ts` (Cognito OIDC settings, dev bypass, refresh-token renewal, sign-out on renewal failure), `assumptions-form.test.tsx` (read-only vs. editable, edits stored as decimals, client-side bound warnings, SOTP read-only), `active-run-guard.test.tsx` (locks while classifying/proposing/building, unlocks on `awaiting_confirm`, cross-tab), `model-confirm-card.test.tsx`, `format.test.ts` (formatting, run-status and bound helpers).
 - **E2E (Playwright)** against the MSW-backed mock API: `run-flow.spec.ts` (ticker → confirm → live progress → result with download links; cancel), `single-run-lock.spec.ts` (a building run restores the overlay, 409 redirects to the active run, `awaiting_confirm` does not lock).
 
 ### 13.3 CI (`.github/workflows/ci-backend.yml`, `ci-frontend.yml`)
@@ -1751,7 +1751,7 @@ Every ticket should open its own PR/branch against `main`, include tests, and no
 - `jobs/worker_settings.py` (SAQ `WorkerSettings`), `jobs/classify_job.py` (`classify_and_propose`), `jobs/build_job.py` (`build_model`), `jobs/cancel.py` (the cancellable-task wrapper from §8.3).
 - `runs/state_machine.py`, `runs/lock.py` (single-flight build lock from §8.4), `runs/cache_key.py` (§8.5).
 - Wires: classifier → proposer → cache check → engine → exporters → S3 upload → DB update, with `run_events` rows emitted at each stage transition for the SSE stream to pick up.
-- Tests: `test_run_lifecycle.py`, `test_cache_hit_and_fork.py`, `test_single_flight_lock.py`, `test_cancel.py` from §13.1 (integration-level, mocked external HTTP, real Postgres/Redis via `testcontainers`).
+- Tests: `test_run_lifecycle.py`, `test_cache_hit_and_fork.py`, `test_single_flight_lock.py`, `test_cancel.py` from §13.1 (integration-level, mocked external HTTP, real Postgres/Redis from `TEST_DATABASE_URL`/`TEST_REDIS_URL` or throwaway local instances).
 
 ---
 

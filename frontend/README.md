@@ -3,7 +3,7 @@
 Spec: `docs/SPEC.md` §10. Node >= 22 locally (CI and Docker use Node 24).
 
 Production: Vercel (Root Directory `frontend`), calling the API cross-origin at `NEXT_PUBLIC_API_BASE_URL`
-(the EC2 host's `https://<api host>`). See `docs/DEPLOYMENT.md` → "A5. Vercel (frontend)".
+(the EC2 host's `https://<api host>`). See `docs/DEPLOYMENT.md` → "A4. Vercel (frontend)".
 
 | Script | What it does |
 |---|---|
@@ -24,7 +24,7 @@ Production: Vercel (Root Directory `frontend`), calling the API cross-origin at 
 AWS Cognito is used only for sign-in: Authorization Code + PKCE against Cognito managed login
 (`oidc-client-ts`, `lib/auth.ts`), scopes `openid email`, redirect URI `<origin>/auth/callback`,
 sign-out redirect `<origin>/`. Env: `NEXT_PUBLIC_COGNITO_DOMAIN` (managed-login domain, e.g.
-`https://<prefix>.auth.us-east-1.amazoncognito.com`), `NEXT_PUBLIC_COGNITO_CLIENT_ID`,
+`https://<prefix>.auth.us-east-2.amazoncognito.com`), `NEXT_PUBLIC_COGNITO_CLIENT_ID`,
 `NEXT_PUBLIC_COGNITO_USER_POOL_ID`, `NEXT_PUBLIC_COGNITO_REGION`. Tokens are kept in localStorage and the
 access token is renewed with the refresh token before it expires. The API receives the **access
 token** (`Authorization: Bearer ...`).

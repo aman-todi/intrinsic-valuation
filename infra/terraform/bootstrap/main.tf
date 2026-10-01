@@ -15,7 +15,7 @@ terraform {
 variable "aws_region" {
   description = "Region for the state bucket (use the same region as the main config)."
   type        = string
-  default     = "us-east-1"
+  default     = "us-east-2"
 }
 
 variable "state_bucket_name" {
