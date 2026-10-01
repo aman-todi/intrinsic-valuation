@@ -80,19 +80,28 @@ resource "aws_iam_instance_profile" "app" {
 }
 
 # ============================================================================
-# GitHub Actions deploy role (OIDC; only <owner>/<repo> on refs/heads/<branch>)
+# GitHub Actions deploy identity. Same permissions either way (github_deploy policy below):
+#   oidc       -> OIDC provider + role trusted only for <owner>/<repo> on refs/heads/<branch>
+#   access_key -> IAM user dcf-github-deploy; its access key is created outside Terraform (so the secret
+#                 never enters state) and stored as GitHub secrets (docs/DEPLOYMENT.md A5). For accounts
+#                 whose SCPs deny iam:*Provider*, e.g. an AWS project in the new AWS experience.
 # ============================================================================
+locals {
+  github_oidc = var.github_deploy_auth == "oidc"
+}
+
 resource "aws_iam_openid_connect_provider" "github" {
-  count          = var.github_oidc_provider_arn == "" ? 1 : 0
+  count          = local.github_oidc && var.github_oidc_provider_arn == "" ? 1 : 0
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
 }
 
 locals {
-  github_oidc_provider_arn = var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
+  github_oidc_provider_arn = !local.github_oidc ? "" : (var.github_oidc_provider_arn != "" ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn)
 }
 
 data "aws_iam_policy_document" "github_assume" {
+  count = local.github_oidc ? 1 : 0
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
@@ -113,9 +122,16 @@ data "aws_iam_policy_document" "github_assume" {
 }
 
 resource "aws_iam_role" "github_deploy" {
+  count                = local.github_oidc ? 1 : 0
   name                 = "${local.name}-github-deploy"
-  assume_role_policy   = data.aws_iam_policy_document.github_assume.json
+  assume_role_policy   = data.aws_iam_policy_document.github_assume[0].json
   max_session_duration = 3600
+}
+
+resource "aws_iam_user" "github_deploy" {
+  count = local.github_oidc ? 0 : 1
+  name  = "${local.name}-github-deploy"
+  tags  = { Purpose = "GitHub Actions deploys (access key stored as GitHub secrets)" }
 }
 
 data "aws_iam_policy_document" "github_deploy" {
@@ -170,7 +186,15 @@ data "aws_iam_policy_document" "github_deploy" {
 }
 
 resource "aws_iam_role_policy" "github_deploy" {
+  count  = local.github_oidc ? 1 : 0
   name   = "${local.name}-github-deploy"
-  role   = aws_iam_role.github_deploy.id
+  role   = aws_iam_role.github_deploy[0].id
+  policy = data.aws_iam_policy_document.github_deploy.json
+}
+
+resource "aws_iam_user_policy" "github_deploy" {
+  count  = local.github_oidc ? 0 : 1
+  name   = "${local.name}-github-deploy"
+  user   = aws_iam_user.github_deploy[0].name
   policy = data.aws_iam_policy_document.github_deploy.json
 }

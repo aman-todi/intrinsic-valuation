@@ -59,6 +59,9 @@ resource "aws_db_parameter_group" "main" {
   parameter {
     name  = "rds.force_ssl"
     value = "1"
+    # What RDS reports for this parameter; "immediate" would show as a diff on every plan. A new
+    # instance reads its parameter group at creation, so TLS is enforced from the start either way.
+    apply_method = "pending-reboot"
   }
 
   lifecycle {

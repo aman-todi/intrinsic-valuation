@@ -26,7 +26,7 @@ frontend_origins = [
 # db_instance_class        = "db.t4g.micro"  # db.t4g.small (2 GB) if the DB is memory-bound
 # db_allocated_storage_gb  = 20
 # db_max_allocated_storage_gb = 50
-# db_backup_retention_days = 7
+# db_backup_retention_days = 7            # the Free plan rejects 7: use 1 until the account is on the Paid plan
 # db_deletion_protection   = true            # false (and apply) right before `terraform destroy`
 
 # Optional: everything else
@@ -36,5 +36,6 @@ frontend_origins = [
 # monthly_budget_usd = 45
 # cpu_credits        = "unlimited"       # "standard" = never billed for bursts, but throttled
 # s3_bucket_name     = ""                # default <project>-app-artifacts-<account-id>
-# github_oidc_provider_arn = ""          # set if the account already has the GitHub OIDC provider
+# github_deploy_auth = "access_key"     # "oidc" where the account allows OIDC providers (not AWS projects)
+# github_oidc_provider_arn = ""          # oidc only: set if the account already has the GitHub OIDC provider
 # force_destroy      = false             # true (and apply) right before `terraform destroy`

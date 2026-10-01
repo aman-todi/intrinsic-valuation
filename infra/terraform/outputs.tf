@@ -29,8 +29,13 @@ output "s3_bucket" {
 }
 
 output "github_deploy_role_arn" {
-  description = "GitHub secret AWS_DEPLOY_ROLE_ARN."
-  value       = aws_iam_role.github_deploy.arn
+  description = "GitHub secret AWS_DEPLOY_ROLE_ARN (github_deploy_auth = \"oidc\" only)."
+  value       = local.github_oidc ? aws_iam_role.github_deploy[0].arn : null
+}
+
+output "github_deploy_user" {
+  description = "IAM user whose access key goes into the GitHub secrets AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (github_deploy_auth = \"access_key\" only)."
+  value       = local.github_oidc ? null : aws_iam_user.github_deploy[0].name
 }
 
 output "ssm_prefix" {

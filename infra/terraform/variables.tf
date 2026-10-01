@@ -222,13 +222,24 @@ variable "github_repo" {
 }
 
 variable "github_branch" {
-  description = "Only workflows running on this branch can assume the deploy role."
+  description = "With github_deploy_auth = \"oidc\": only workflows running on this branch can assume the deploy role."
   type        = string
   default     = "main"
 }
 
+variable "github_deploy_auth" {
+  description = "How GitHub Actions authenticates to AWS: \"access_key\" (IAM user dcf-github-deploy; create its key with the CLI and store it as GitHub secrets) or \"oidc\" (OIDC provider + role, no stored keys). AWS projects in the new AWS experience deny iam:*Provider*, so they need access_key."
+  type        = string
+  default     = "access_key"
+
+  validation {
+    condition     = contains(["access_key", "oidc"], var.github_deploy_auth)
+    error_message = "github_deploy_auth must be \"access_key\" or \"oidc\"."
+  }
+}
+
 variable "github_oidc_provider_arn" {
-  description = "ARN of an existing token.actions.githubusercontent.com OIDC provider in this account. Empty = create one (an account can only have one)."
+  description = "With github_deploy_auth = \"oidc\": ARN of an existing token.actions.githubusercontent.com OIDC provider in this account. Empty = create one (an account can only have one)."
   type        = string
   default     = ""
 }

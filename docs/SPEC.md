@@ -1448,11 +1448,11 @@ State lives in an S3 bucket created once by `infra/terraform/bootstrap/` (versio
 - **Storage**: S3 artifact bucket (public access blocked, SSE-S3, TLS-only; lifecycle expires `models/` and `runs/` after 35 days, `deploy/` bundles after 90 days). ECR repositories `dcf-api` and `dcf-worker` (scan on push, keep last 10 images).
 - **IAM**:
   - Instance role: `AmazonSSMManagedInstanceCore`, ECR pull, S3 on the artifact bucket, `ssm:GetParameter*` on `/dcf/prod/*`, `kms:Decrypt` via SSM.
-  - GitHub Actions OIDC provider + deploy role trusted only for `repo:<owner>/<repo>:ref:refs/heads/main`: ECR push, `s3:PutObject` on `deploy/*`, read of `/dcf/prod/config/*` (never secrets), `ssm:SendCommand` restricted to this instance and `AWS-RunShellScript`.
+  - GitHub Actions deploy identity (`github_deploy_auth`): the IAM user `dcf-github-deploy` whose access key is stored as GitHub secrets (default; AWS projects deny OIDC providers), or an OIDC provider + role trusted only for `repo:<owner>/<repo>:ref:refs/heads/main`. Either way: ECR push, `s3:PutObject` on `deploy/*`, read of `/dcf/prod/config/*` (never secrets), `ssm:SendCommand` restricted to this instance and `AWS-RunShellScript`.
 - **Configuration**: SSM Parameter Store under `/dcf/prod/`. Terraform writes non-secret `config/*` String parameters (`APP_DOMAIN`, `PUBLIC_API_BASE_URL`, `CORS_ORIGINS` (from `frontend_origins`), `ACME_EMAIL`, `AWS_REGION`, `S3_BUCKET_NAME`, `ECR_REGISTRY`, `INSTANCE_ID`, `WORKER_CONCURRENCY`, `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`) and the `DATABASE_URL` SecureString. Owner-supplied secrets (`ANTHROPIC_API_KEY`, `FRED_API_KEY`) plus plain `SEC_EDGAR_USER_AGENT`/`ANTHROPIC_MODEL` are written by `infra/scripts/put_ssm_params.sh` and never enter Terraform state.
 - **API hostname**: `domain_name` variable (an A record to the Elastic IP); when empty, `<eip-with-dashes>.sslip.io`, which Let's Encrypt accepts, so HTTPS works without owning a domain.
 - **Budget**: `aws_budgets_budget` (default $45/month) emailing at 80%/100% actual and 100% forecast.
-- **Outputs**: `api_url`, `api_domain`, `elastic_ip`, `instance_id`, SSM session and DB port-forward commands, ECR URLs, bucket name, `github_deploy_role_arn`, `frontend_origins`, Cognito (`cognito_domain_url`, `cognito_client_id`, `cognito_user_pool_id`, `cognito_region`) and `vercel_env` (all five `NEXT_PUBLIC_*` values), `rds_endpoint`.
+- **Outputs**: `api_url`, `api_domain`, `elastic_ip`, `instance_id`, SSM session and DB port-forward commands, ECR URLs, bucket name, `github_deploy_user` / `github_deploy_role_arn`, `frontend_origins`, Cognito (`cognito_domain_url`, `cognito_client_id`, `cognito_user_pool_id`, `cognito_region`) and `vercel_env` (all five `NEXT_PUBLIC_*` values), `rds_endpoint`.
 
 Approximate monthly cost (us-east-2, on-demand): EC2 `t4g.small` ≈ $12.30, 30 GB gp3 ≈ $2.40, public IPv4 ≈ $3.65, RDS `db.t4g.micro` ≈ $11.70 + 20 GB gp3 ≈ $2.30 (backups within the free allowance), S3/ECR/data transfer < $1 — **≈ $33–35/month**; Cognito Essentials costs nothing at this user count; `t4g.medium` for the app host adds ≈ $12. Vercel Hobby: $0 (non-commercial use).
 
@@ -1460,7 +1460,7 @@ Approximate monthly cost (us-east-2, on-demand): EC2 `t4g.small` ≈ $12.30, 30 
 
 `.github/workflows/deploy.yml` runs on push to `main` when the repo variable `DEPLOY_ENABLED == 'true'` (otherwise a notice-only job keeps `main` green):
 
-1. **Build** (matrix: api, worker) on an arm64 runner (`ubuntu-24.04-arm`, overridable via `ARM_RUNNER`; QEMU fallback), OIDC into the deploy role, `docker buildx build --platform linux/arm64`, push to ECR tagged with the full git SHA.
+1. **Build** (matrix: api, worker) on an arm64 runner (`ubuntu-24.04-arm`, overridable via `ARM_RUNNER`; QEMU fallback), AWS credentials of the deploy identity, `docker buildx build --platform linux/arm64`, push to ECR tagged with the full git SHA.
 2. **Deploy**: `infra/scripts/deploy.sh --skip-build --tag <sha>` uploads a bundle (`docker-compose.prod.yml`, `Caddyfile`, `deploy_remote.sh`) to `s3://<bucket>/deploy/<sha>.tar.gz`, then runs it on the host via **SSM Run Command** and waits for the result.
 3. **On the host** (`/opt/dcf/deploy.sh <sha>`, under a lock): render `/opt/dcf/.env` (0600) from every parameter under `/dcf/prod`; ECR login; `docker compose pull`; `alembic upgrade head` in a one-off container of the new api image — **on failure, restore the previous `.env` and leave the running stack untouched**; `docker compose up -d --remove-orphans`; reload Caddy if its config changed; wait for the api healthcheck and all four services; probe HTTPS through Caddy; record current/previous tag; prune old images.
 
@@ -1652,7 +1652,7 @@ No account or key. `SEC_EDGAR_USER_AGENT` must be a real app name + contact emai
 
 ### 14.8 GitHub
 
-1. **Settings → Secrets and variables → Actions**: secret `AWS_DEPLOY_ROLE_ARN` (`terraform output github_deploy_role_arn`); variables `DEPLOY_ENABLED=true`, optional `AWS_REGION`, `ARM_RUNNER`.
+1. **Settings → Secrets and variables → Actions**: secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (an access key of `terraform output github_deploy_user`, piped from `aws iam create-access-key` into `gh secret set`), or `AWS_DEPLOY_ROLE_ARN` with OIDC; variables `DEPLOY_ENABLED=true`, optional `AWS_REGION`, `ARM_RUNNER`.
 2. CI (`ci-backend.yml`, `ci-frontend.yml`) needs no secrets; everything external is mocked.
 3. `deploy.yml` runs on push to `main` per §11.4.
 ## 15. Ticket breakdown (15 tickets, designed for parallel execution)
@@ -1775,7 +1775,7 @@ Every ticket should open its own PR/branch against `main`, include tests, and no
 
 **Ticket 15 — Deployment**
 *Depends on: 1, 11, 12, 13.*
-- Terraform under `infra/terraform/` per §11.3 (bootstrap state bucket, EC2 host + Elastic IP + security group, RDS PostgreSQL, Cognito user pool + app client + managed-login domain, S3, ECR, IAM instance role, GitHub OIDC deploy role, SSM parameters, budget, status-check alarms), with `terraform fmt`/`validate` clean.
+- Terraform under `infra/terraform/` per §11.3 (bootstrap state bucket, EC2 host + Elastic IP + security group, RDS PostgreSQL, Cognito user pool + app client + managed-login domain, S3, ECR, IAM instance role, GitHub deploy user (or OIDC role), SSM parameters, budget, status-check alarms), with `terraform fmt`/`validate` clean.
 - `infra/deploy/docker-compose.prod.yml` + `Caddyfile` per §11.2; arm64 Dockerfiles per §11.1.
 - `infra/scripts/put_ssm_params.sh`, `deploy.sh`, `deploy_remote.sh` and `.github/workflows/deploy.yml` per §11.4 (gated on `DEPLOY_ENABLED`).
 - `docs/DEPLOYMENT.md`: the full runbook (§14) split into owner-manual vs. scripted steps, operations (SSM shell, logs, restart, rollback, resize, teardown), cost table, and local-dev/offline-demo instructions.

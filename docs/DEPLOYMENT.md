@@ -26,7 +26,7 @@ Use the [order of operations](#order-of-operations) table to move between the tw
                                     (security group dcf-db: 5432 from dcf-app only)
               api + worker ──> S3 (instance role), SEC EDGAR, Yahoo, FRED, Anthropic
 
- GitHub Actions (push to main) ──OIDC──> ECR push (arm64 images) ──> SSM Run Command ──> /opt/dcf/deploy.sh <sha>
+ GitHub Actions (push to main) ──IAM user key──> ECR push (arm64 images) ──> SSM Run Command ──> /opt/dcf/deploy.sh <sha>
 ```
 
 | Decision | Choice | Why / alternative |
@@ -40,7 +40,7 @@ Use the [order of operations](#order-of-operations) table to move between the tw
 | Images | **ECR** (`dcf-api`, `dcf-worker`), tagged with the git SHA, last 10 kept | The instance pulls with its role. |
 | Runtime config and secrets | **SSM Parameter Store** under `/dcf/prod/*` | Terraform writes the non-secret `config/*` values (Cognito ids, domain, bucket, …) and the `DATABASE_URL` SecureString. The owner writes the third-party API keys with `put_ssm_params.sh`; those never enter git, images or Terraform state. Each deploy renders `/opt/dcf/.env` (0600) from SSM. |
 | Shell access | **SSM Session Manager** | No SSH port is open and there is no key pair. |
-| Deploys | **GitHub Actions → OIDC → ECR → SSM Run Command** | No inbound access is needed for deploys. The same flow runs from a laptop with `infra/scripts/deploy.sh`. The deploy role can read `/dcf/prod/config/*` only, never the secrets or `DATABASE_URL`. |
+| Deploys | **GitHub Actions → ECR → SSM Run Command**, authenticated as the IAM user `dcf-github-deploy` | No inbound access is needed for deploys. The same flow runs from a laptop with `infra/scripts/deploy.sh`. The deploy identity can read `/dcf/prod/config/*` only, never the secrets or `DATABASE_URL`. AWS projects deny `iam:*Provider*`, so GitHub OIDC (no stored keys) is not possible there; its access key is stored as GitHub secrets and should be rotated (below). Accounts that allow OIDC can set `github_deploy_auth = "oidc"` instead. |
 | IaC | **Terraform** (`infra/terraform/`), S3 state with native lockfiles | No DynamoDB table is needed (Terraform ≥ 1.10). |
 
 > **The database password is in Terraform state.** Terraform generates it (`random_password.db`), sets it on the RDS instance and writes it into the `/dcf/prod/DATABASE_URL` SecureString. Both the password and the full URL are therefore stored in the state file, which lives in the private, versioned, SSE-encrypted, public-access-blocked state bucket created by `infra/terraform/bootstrap`. Treat read access to that bucket (and to `terraform.tfstate` backups) as read access to the database.
@@ -50,7 +50,7 @@ What lives where:
 | Path | What |
 |---|---|
 | `infra/terraform/bootstrap/` | The Terraform state bucket (one time) |
-| `infra/terraform/` | VPC lookups, security groups, EIP, instance and user data, RDS (`database.tf`), Cognito (`auth.tf`), IAM (instance role, GitHub OIDC deploy role), S3, ECR, SSM parameters, budget, status-check alarms |
+| `infra/terraform/` | VPC lookups, security groups, EIP, instance and user data, RDS (`database.tf`), Cognito (`auth.tf`), IAM (instance role, GitHub deploy user or OIDC role), S3, ECR, SSM parameters, budget, status-check alarms |
 | `infra/deploy/docker-compose.prod.yml`, `infra/deploy/Caddyfile` | The production stack. It is shipped to the box with every deploy |
 | `infra/scripts/deploy_remote.sh` | Runs **on the box** as `/opt/dcf/deploy.sh <sha>` |
 | `infra/scripts/deploy.sh` | Builds and pushes images (optional), uploads the bundle, triggers the box through SSM. Used by CI and for manual deploys |
@@ -119,7 +119,9 @@ Run `cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvar
 | Variable | Value |
 |---|---|
 | `aws_region` | `us-east-2` (default): the AWS project's selected Region. EC2, RDS and Cognito all live here |
-| `github_owner` / `github_repo` | for example `aman-todi` / `intrinsic-valuation`. Only `refs/heads/main` of this repo can assume the deploy role |
+| `github_owner` / `github_repo` | for example `aman-todi` / `intrinsic-valuation`. With `github_deploy_auth = "oidc"`, only `refs/heads/main` of this repo can assume the deploy role |
+| `github_deploy_auth` | `access_key` (default, required in an AWS project): IAM user `dcf-github-deploy`. `oidc`: OIDC provider + role, where the account allows it |
+| `db_backup_retention_days` | `7` (default). The **Free plan rejects 7**: use `1` until the account is on the Paid plan, then raise it (in place) |
 | `alert_email` | budget alerts and the Let's Encrypt contact |
 | `frontend_origins` | `[]` for now. After [A4](#a4-vercel-frontend), `["https://<your-app>.vercel.app"]`. This **one list** feeds the API's `CORS_ORIGINS` **and** the Cognito app client's callback URLs (`<origin>/auth/callback`) and sign-out URLs (`<origin>/`). Exact origins, `https://`, no trailing slash, no wildcards. (It replaces the former `cors_origins` variable; rename it in an existing `terraform.tfvars`.) |
 | `cognito_allow_self_signup` | `true` (default): anyone can create an account on the managed login page (email + password, verified by an emailed code). `false`: invite-only, users are created by you ([A6](#a6-users-cognito)) |
@@ -178,10 +180,21 @@ Go to **Settings → Secrets and variables → Actions**.
 
 | Kind | Name | Value |
 |---|---|---|
-| Secret | `AWS_DEPLOY_ROLE_ARN` | `terraform output -raw github_deploy_role_arn` |
+| Secret | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | An access key of the IAM user `dcf-github-deploy` (`terraform output -raw github_deploy_user`). Create it and pipe it straight into GitHub so it is never printed or written to disk (below) |
+| Secret | `AWS_DEPLOY_ROLE_ARN` | Only with `github_deploy_auth = "oidc"`: `terraform output -raw github_deploy_role_arn`, instead of the two keys |
 | Variable | `DEPLOY_ENABLED` | `true`. While unset, `deploy.yml` only posts a notice, so `main` stays green |
 | Variable | `AWS_REGION` | `us-east-2`. Must match `aws_region` (the workflow falls back to `us-east-2` when unset) |
 | Variable | `ARM_RUNNER` | optional, default `ubuntu-24.04-arm` (native arm64 GitHub-hosted runner). If arm64 hosted runners are not available for this repository or plan, so the job never starts, set it to `ubuntu-latest`. The images are then built under QEMU emulation, which is slower |
+
+Create the access key and store it (needs `gh` signed in with admin on the repo; nothing is printed):
+
+```bash
+USER="$(terraform -chdir=infra/terraform output -raw github_deploy_user)"
+aws iam create-access-key --user-name "$USER" --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text |
+  { read -r id secret; printf %s "$id" | gh secret set AWS_ACCESS_KEY_ID; printf %s "$secret" | gh secret set AWS_SECRET_ACCESS_KEY; }
+```
+
+**Rotate** it every few months, or immediately if it may have leaked: list the keys (`aws iam list-access-keys --user-name dcf-github-deploy`), run the command above (a user can hold two keys), re-run the latest deploy to confirm the new key works, then `aws iam delete-access-key --user-name dcf-github-deploy --access-key-id <old id>`. The key's permissions are the narrow deploy policy listed under [B1](#b1-terraform).
 
 The workflow needs nothing else. It reads the instance id, bucket and registry from SSM `/dcf/prod/config/*`, which Terraform writes. The frontend's `NEXT_PUBLIC_*` values live in Vercel, not in GitHub.
 
@@ -261,10 +274,10 @@ cd ..
 terraform init -backend-config=backend.hcl # S3 backend, use_lockfile = true (no DynamoDB); aws + random providers
 terraform plan -out tfplan                 # needs terraform.tfvars (A3)
 terraform apply tfplan                     # ~10-15 min, mostly the RDS instance (5-10 min)
-terraform output                           # api_url, vercel_env, cognito_*, rds_endpoint, github_deploy_role_arn, ...
+terraform output                           # api_url, vercel_env, cognito_*, rds_endpoint, github_deploy_user, ...
 ```
 
-Commit the generated `infra/terraform/.terraform.lock.hcl` so every machine uses the same provider builds. If the account already has a GitHub OIDC provider, set `github_oidc_provider_arn`, because an account can only have one.
+Commit the generated `infra/terraform/.terraform.lock.hcl` so every machine uses the same provider builds. With `github_deploy_auth = "oidc"`: if the account already has a GitHub OIDC provider, set `github_oidc_provider_arn`, because an account can only have one.
 
 What it creates (prefix `dcf`):
 
@@ -274,7 +287,7 @@ What it creates (prefix `dcf`):
 | `user_data` (`templates/user_data.sh.tftpl`) | Runs once: Docker, compose plugin (pinned and checksum-verified), 2 GB swapfile, json-file log rotation (10 MB × 5), `live-restore`, `/opt/dcf`, a `dcf-compose` shell alias. App files arrive with each deploy |
 | `aws_eip.app` + association | A stable public IPv4, which the sslip.io name and your DNS point at |
 | `aws_security_group.app` | Inbound TCP 80/443 and UDP 443 (HTTP/3) from `0.0.0.0/0` and `::/0`. **No SSH.** All egress |
-| `aws_db_instance.main` (`dcf-db`) | PostgreSQL `17` (region default minor; auto minor upgrades), `db.t4g.micro`, 20 GB **gp3**, storage autoscaling to 50 GB, **encrypted**, single-AZ in the **same AZ as the app**, `publicly_accessible = false`, backups **7 days** (window 07:00–07:30 UTC), maintenance Sun 08:00–08:30 UTC, `deletion_protection`, final snapshot `dcf-db-final` on delete, Performance Insights / Enhanced Monitoring off. Database `dcf`, master user `dcf_app` |
+| `aws_db_instance.main` (`dcf-db`) | PostgreSQL `17` (region default minor; auto minor upgrades), `db.t4g.micro`, 20 GB **gp3**, storage autoscaling to 50 GB, **encrypted**, single-AZ in the **same AZ as the app**, `publicly_accessible = false`, backups **7 days** (`db_backup_retention_days`; 1 on the Free plan) (window 07:00–07:30 UTC), maintenance Sun 08:00–08:30 UTC, `deletion_protection`, final snapshot `dcf-db-final` on delete, Performance Insights / Enhanced Monitoring off. Database `dcf`, master user `dcf_app` |
 | `aws_db_parameter_group.main` | `postgres17` family with **`rds.force_ssl = 1`** (non-TLS connections are refused) |
 | `aws_db_subnet_group.main`, `aws_security_group.db` | All default-VPC subnets; inbound **5432 only from the `dcf-app` security group**, no egress |
 | `random_password.db` → `aws_ssm_parameter.database_url` | 32-char alphanumeric master password; SecureString **`/dcf/prod/DATABASE_URL`** = `postgresql+psycopg://dcf_app:<password>@<rds endpoint>:5432/dcf?sslmode=require`. In Terraform state (see the note under [Architecture](#architecture)) |
@@ -282,14 +295,14 @@ What it creates (prefix `dcf`):
 | `aws_cognito_user_pool_domain.main` | Managed login **v2** on `https://<prefix>.auth.<region>.amazoncognito.com` (`random_id` suffix unless `cognito_domain_prefix`) |
 | `aws_cognito_user_pool_client.web` + `aws_cognito_managed_login_branding.web` | **Public** client (no secret): `code` flow (PKCE), scopes `openid email`, IdP `COGNITO`, callbacks `<frontend_origins>/auth/callback` (+ localhost), sign-out `<frontend_origins>/` (+ localhost), access/ID tokens 1 h, refresh 30 d, token revocation on, user-existence errors hidden, auth flows `ALLOW_USER_AUTH` + `ALLOW_REFRESH_TOKEN_AUTH`. Default Cognito branding |
 | IAM `dcf-app-instance` role and profile | `AmazonSSMManagedInstanceCore`; ECR pull (2 repos); S3 List/Get/Put/Delete on the bucket; `ssm:GetParameter*` on `/dcf/prod/*`; `kms:Decrypt` only via SSM. (Nothing RDS- or Cognito-specific: the DB is reached over the network with `DATABASE_URL`, and token validation only fetches the public JWKS) |
-| GitHub OIDC provider and `dcf-github-deploy` role | Trust: `repo:<owner>/<repo>:ref:refs/heads/main`. Permissions: ECR push to the 2 repos, `s3:PutObject` on `deploy/*`, read `/dcf/prod/config/*` (**not** the secrets or `DATABASE_URL`), `ssm:SendCommand` only on this instance plus `AWS-RunShellScript`, and the read-only `GetCommandInvocation`/`DescribeInstanceInformation` |
+| `dcf-github-deploy` IAM user (`access_key`, default) or GitHub OIDC provider + `dcf-github-deploy` role (`oidc`; trust `repo:<owner>/<repo>:ref:refs/heads/main`) | Permissions (same for both): ECR push to the 2 repos, `s3:PutObject` on `deploy/*`, read `/dcf/prod/config/*` (**not** the secrets or `DATABASE_URL`), `ssm:SendCommand` only on this instance plus `AWS-RunShellScript`, and the read-only `GetCommandInvocation`/`DescribeInstanceInformation` |
 | S3 `dcf-app-artifacts-<account-id>` | Public access blocked, SSE-S3, TLS-only policy, BucketOwnerEnforced. Lifecycle: `models/` and `runs/` expire after **35 days**, `deploy/` bundles after 90 days, abort incomplete multipart uploads after 7 days. `edgar-raw/` and `damodaran/` are kept |
 | ECR `dcf-api`, `dcf-worker` | Scan on push; lifecycle **keeps the last 10** images |
 | SSM `/dcf/prod/config/*` (String) | `APP_DOMAIN`, `PUBLIC_API_BASE_URL`, `CORS_ORIGINS` (= `frontend_origins`), `ACME_EMAIL`, `AWS_REGION`, `S3_BUCKET_NAME`, `ECR_REGISTRY`, `INSTANCE_ID`, `WORKER_CONCURRENCY`, **`COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`** |
 | `aws_budgets_budget.monthly` | $45/month, email at 80% and 100% of actual spend and 100% of forecast |
 | CloudWatch alarms (`enable_status_check_alarms`) | System status check failure → **recover**; instance status check failure (for example an OOM hang) → **reboot** |
 
-Useful outputs: `vercel_env` (all five `NEXT_PUBLIC_*` values), `cognito_domain_url`, `cognito_client_id`, `cognito_user_pool_id`, `cognito_region`, `cognito_callback_urls`, `rds_endpoint`, `database_url_ssm_parameter`, `db_port_forward_command`, `api_url`, `instance_id`, `github_deploy_role_arn`.
+Useful outputs: `vercel_env` (all five `NEXT_PUBLIC_*` values), `cognito_domain_url`, `cognito_client_id`, `cognito_user_pool_id`, `cognito_region`, `cognito_callback_urls`, `rds_endpoint`, `database_url_ssm_parameter`, `db_port_forward_command`, `api_url`, `instance_id`, `github_deploy_user` (or `github_deploy_role_arn` with OIDC).
 
 ## B2. Secrets into SSM
 
@@ -321,8 +334,8 @@ The deploy **pins** these values in `docker-compose.prod.yml`, and they cannot b
 ### Automatic: every push to `main`
 
 `.github/workflows/deploy.yml` runs when `DEPLOY_ENABLED == 'true'`:
-1. **build** (matrix `api`, `worker`, on native arm64 runners): OIDC → ECR login → `docker buildx` for `linux/arm64` with a GitHub Actions layer cache → push `dcf-<image>:<git sha>`.
-2. **deploy**: OIDC → `infra/scripts/deploy.sh --skip-build --tag <sha>`.
+1. **build** (matrix `api`, `worker`, on native arm64 runners): AWS credentials from the secrets → ECR login → `docker buildx` for `linux/arm64` with a GitHub Actions layer cache → push `dcf-<image>:<git sha>`.
+2. **deploy**: AWS credentials → `infra/scripts/deploy.sh --skip-build --tag <sha>`.
 
 A single concurrency group means deploys never overlap. You can also run it by hand with **Actions → deploy → Run workflow** on `main`.
 
@@ -395,7 +408,7 @@ sudo SKIP_MIGRATIONS=true /opt/dcf/deploy.sh <sha>   # re-run / roll back from t
 | **Change config** (origins, domain, worker concurrency, Cognito options) | Edit `terraform.tfvars`, run `terraform apply`, then redeploy (`deploy.sh --skip-build --tag <current sha>`). |
 | **Rotate an API key** | Update `.env`, run `put_ssm_params.sh`, then redeploy. The deploy re-renders `.env`, and compose recreates the api and worker. |
 | **Rotate the DB password** | [Below](#rotate-the-database-password). |
-| **Backups** | RDS: automated daily snapshots plus transaction logs, **7 days** of point-in-time restore; [restore below](#database-backups-and-restore). Take a manual snapshot before risky migrations. Artifacts in S3 are regenerable caches. The only local state on the box is the `caddy_data` volume (certificates), which is re-issued automatically if lost; avoid destroying it repeatedly, because of Let's Encrypt rate limits. |
+| **Backups** | RDS: automated daily snapshots plus transaction logs, **7 days** of point-in-time restore (1 day while on the Free plan); [restore below](#database-backups-and-restore). Take a manual snapshot before risky migrations. Artifacts in S3 are regenerable caches. The only local state on the box is the `caddy_data` volume (certificates), which is re-issued automatically if lost; avoid destroying it repeatedly, because of Let's Encrypt rate limits. |
 | **OS patches** | Monthly, from a session: `sudo dnf upgrade --releasever=latest -y && sudo reboot`. Docker and every container (`restart: unless-stopped`) come back on their own. RDS minor versions are patched automatically in the Sunday maintenance window. |
 | **DB connections** | Each app process opens at most 10 connections (SQLAlchemy pool 5 + 5 overflow): 2 uvicorn workers + 1 SAQ worker = **≤ 30**, plus one short-lived Alembic container per deploy. `db.t4g.micro` allows roughly 80–110 (`max_connections` scales with RAM; `show max_connections;`), so there is ample headroom for a tunnelled `psql`. Raise `worker_concurrency` or uvicorn workers with this budget in mind. |
 | **Disk** | `docker system df`. Each deploy prunes unused images. The root volume is 30 GB. RDS storage grows automatically up to 50 GB (`db_max_allocated_storage_gb`); it never shrinks. |
@@ -418,7 +431,7 @@ DBURL="$(aws ssm get-parameter --name /dcf/prod/DATABASE_URL --with-decryption -
 psql "$(printf %s "$DBURL" | sed -E 's#^postgresql\+psycopg://#postgresql://#; s#@[^/]+/#@localhost:15432/#')"
 ```
 
-This is the master user: be careful. The same tunnel works for `pg_dump` / `pg_restore` and GUI clients (host `localhost`, port `15432`, SSL mode `require`). Reading `/dcf/prod/DATABASE_URL` needs `ssm:GetParameter` + `kms:Decrypt` (admins); the GitHub deploy role cannot.
+This is the master user: be careful. The same tunnel works for `pg_dump` / `pg_restore` and GUI clients (host `localhost`, port `15432`, SSL mode `require`). Reading `/dcf/prod/DATABASE_URL` needs `ssm:GetParameter` + `kms:Decrypt` (admins); the GitHub deploy user cannot.
 
 ### Database backups and restore
 
@@ -510,7 +523,7 @@ This estimate is for on-demand pricing in us-east-2, running 730 hours a month, 
 | ECR | 2 repos × up to 10 images, shared layers (~2 GB) | ~0.20 |
 | Data transfer out | first 100 GB/month free; app ↔ DB traffic stays in one AZ (free) | ~0 |
 | CloudWatch alarms | 2 standard alarms (10 free) | 0–0.20 |
-| SSM Parameter Store (standard), Run Command, Session Manager, Budgets, OIDC | | 0 |
+| SSM Parameter Store (standard), Run Command, Session Manager, Budgets, IAM | | 0 |
 | Terraform state bucket | | ~0.01 |
 | **Total AWS** | | **≈ $33–35** |
 | `t4g.medium` instead (4 GB, $0.0336/h) | | +≈ $12 |

@@ -7,7 +7,7 @@
 # enter state. See docs/DEPLOYMENT.md.
 #
 # Files: network.tf (SG, EIP), compute.tf (instance, alarms), database.tf (RDS, DB SG, DATABASE_URL),
-# auth.tf (Cognito), storage.tf (S3, ECR), iam.tf (instance role, GitHub OIDC deploy role), ssm.tf
+# auth.tf (Cognito), storage.tf (S3, ECR), iam.tf (instance role, GitHub deploy user or OIDC role), ssm.tf
 # (non-secret runtime config), budget.tf, outputs.tf.
 
 data "aws_caller_identity" "current" {}
