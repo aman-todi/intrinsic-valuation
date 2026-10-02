@@ -4,9 +4,9 @@ How the test suite is organized, how to run it locally, and what CI enforces (SP
 
 | Layer | Tests |
 |---|---|
-| Backend unit | 93 |
-| Backend integration | 43 |
-| Frontend Vitest | 20 |
+| Backend unit | 99 |
+| Backend integration | 46 |
+| Frontend Vitest | 23 |
 | Frontend Playwright | 5 |
 
 Each parametrized case counts as one test. The convention is one or two strong tests per behavior
@@ -104,7 +104,7 @@ npx playwright install --with-deps chromium   # once
 npm run test:e2e    # Playwright against `next build && next start`, API mocked via route interception
 ```
 
-- **Vitest (20):** auth (Cognito OIDC settings, dev bypass, refresh-token renewal shared by concurrent callers, local sign-out on renewal failure); assumptions form (read-only formatting with rationale/source, editable toggle with
+- **Vitest (23):** settings menu (light/dark/system appearance stored and applied; account deletion only after typing DELETE, server refusal shown); auth (Cognito OIDC settings, dev bypass, refresh-token renewal shared by concurrent callers, local sign-out on renewal failure); assumptions form (read-only formatting with rationale/source, editable toggle with
   edits propagated as decimals, client-side bound warnings, SOTP read-only, schema ordering + edit
   detection); active-run guard (no run, building locks, polling unlocks at awaiting_confirm, a run
   appearing in another tab locks); model confirm card (display + override); format helpers (per-kind

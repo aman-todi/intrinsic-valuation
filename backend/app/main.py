@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import files, health, runs
+from app.api.routes import account, files, health, runs
 from app.config import settings
 from app.db.base import dispose_engine
 from app.jobs.queue import close_queue
@@ -27,11 +27,12 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Last-Event-ID"],
     )
     app.include_router(health.router)  # unauthenticated
     app.include_router(runs.router)
+    app.include_router(account.router)
     app.include_router(files.router)  # signed URLs (local storage backend only)
     return app
 

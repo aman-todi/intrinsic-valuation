@@ -67,3 +67,16 @@ async def test_raises_typed_error_after_one_retry(monkeypatch, provider):
             await provider.get_price_snapshot("BAD")
         assert ei.value.ticker == "BAD"
         assert len(calls) == 2, bad  # original + exactly one retry
+
+
+def test_regression_beta_is_blume_adjusted_and_needs_three_years():
+    """beta = cov(stock, market) / var(market), then 0.67 x raw + 0.33; under 36 monthly returns -> None."""
+    market = [0.02, -0.01, 0.03, -0.02, 0.01, 0.0] * 7  # 42 months
+    stock = [0.004 + 1.5 * m for m in market]  # alpha + beta x market, no noise
+    est = yp.regression_beta(stock, market, basis="test")
+    assert est is not None and est.observations == 42
+    assert est.raw == pytest.approx(1.5)
+    assert est.adjusted == pytest.approx(0.67 * est.raw + 0.33)
+    assert est.r_squared == pytest.approx(1.0)
+    assert yp.regression_beta(stock[:30], market[:30], basis="test") is None
+    assert yp.regression_beta(stock, [0.01] * 42, basis="test") is None  # flat market

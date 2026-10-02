@@ -61,7 +61,9 @@ def bridge_steps(result: ValuationResult) -> list[tuple[str, float, str]]:
     to a single 'Equity value' bar.
     """
     r = result
-    adds = [("Cash", r.cash_and_equivalents)] + [(a.label, a.amount) for a in r.non_operating_adjustments]
+    adds = [("Cash & investments", r.cash_and_equivalents)] + [
+        (a.label, a.amount) for a in r.non_operating_adjustments
+    ]
     subs = [
         ("Debt", r.total_debt),
         ("Leases", r.operating_lease_liability),

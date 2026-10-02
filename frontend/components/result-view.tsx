@@ -59,7 +59,7 @@ export function buildBridge(r: ValuationResult): BridgeStep[] {
     running = next;
   };
   total("Operating value", r.operating_value);
-  step("Cash", r.cash_and_equivalents);
+  step("Cash & inv.", r.cash_and_equivalents);
   for (const adj of r.non_operating_adjustments) step(adj.label, adj.amount);
   total("Enterprise value", r.enterprise_value);
   step("Debt", -r.total_debt);

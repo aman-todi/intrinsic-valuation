@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /*
- * Design tokens (shadcn/ui-style). Light by default, dark via prefers-color-scheme.
+ * Design tokens (shadcn/ui-style). Light by default; dark via the settings menu (data-theme) or the OS.
  * Components only reference the semantic names below (bg-card, text-muted-foreground, ...).
  */
 :root {
@@ -36,8 +36,10 @@
   --div-mid: #f0efec;
 }
 
+/* Dark tokens: chosen explicitly (data-theme="dark", from the settings menu) or by the OS when the
+ * user picked "System" (no data-theme attribute). data-theme="light" forces light. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --background: #0b1020;
     --foreground: #e2e8f0;
     --card: #111831;
@@ -70,6 +72,38 @@
   }
 }
 
+:root[data-theme="dark"] {
+  --background: #0b1020;
+  --foreground: #e2e8f0;
+  --card: #111831;
+  --card-foreground: #e2e8f0;
+  --muted: #1a2340;
+  --muted-foreground: #94a3b8;
+  --border: #243056;
+  --input: #334170;
+  --ring: #60a5fa;
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+  --secondary: #1a2340;
+  --secondary-foreground: #e2e8f0;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --positive: #4ade80;
+  --negative: #f87171;
+  --warning: #fbbf24;
+  --warning-bg: #2a2110;
+  --overlay: rgb(2 6 23 / 0.7);
+  --chart-1: #60a5fa;
+  --chart-2: #22d3ee;
+  --chart-3: #a78bfa;
+  --chart-pos: #4ade80;
+  --chart-neg: #f87171;
+  --chart-total: #cbd5e1;
+  --div-pos: #3b82f6;
+  --div-neg: #ef4444;
+  --div-mid: #383835;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -96,6 +130,14 @@
 
 html {
   color-scheme: light dark;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 body {

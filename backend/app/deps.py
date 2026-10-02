@@ -59,6 +59,11 @@ def _unauthorized(detail: str) -> HTTPException:
     )
 
 
+def forget_user(user_id: UUID) -> None:
+    """Drop one user from the upsert cache (after deleting their account)."""
+    _touched.pop(user_id, None)
+
+
 def reset_user_touch_cache() -> None:
     """Forget which users were upserted (tests call this after truncating ``users``)."""
     _touched.clear()

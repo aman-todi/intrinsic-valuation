@@ -79,6 +79,15 @@ BIOTECH_RD_TO_REVENUE_MIN = 2.0  # "R&D/revenue far exceeds 1"
 BIOTECH_MIN_YEARS_PUBLIC = 2.0
 BIOTECH_OCF_LOOKBACK_YEARS = 3  # "sustained" = every one of the last N available years negative
 
+# --- TUNABLE: unprofitable commercial-stage biotech -----------------------------------
+# A drug developer whose value is its pipeline (an rNPV problem, out of scope) even though it already
+# sells a product: drug-developer SIC AND an operating loss in the TTM AND in most recent years AND
+# R&D-heavy. Profitable pharma/biotech (PFE, LLY, VRTX, REGN, ...) never matches, whatever its SIC.
+DRUG_DEVELOPER_SICS = frozenset({"2833", "2834", "2835", "2836", "8731"})
+BIOTECH_LOSS_LOOKBACK_YEARS = 3
+BIOTECH_MIN_LOSS_YEARS = 2  # operating losses in at least this many of the last N fiscal years
+BIOTECH_UNPROFITABLE_RD_TO_REVENUE_MIN = 0.30
+
 MIN_FISCAL_YEARS = 3  # below this -> INSUFFICIENT_DATA
 
 # --- TUNABLE: materiality for specialized models --------------------------------------
@@ -124,6 +133,7 @@ DECLINE_CONFIDENCE: dict[DeclineReason, float] = {
     DeclineReason.MLP: 0.90,
     DeclineReason.MINING: 0.90,
     DeclineReason.BIOTECH_PRECOMMERCIAL: 0.80,
+    DeclineReason.BIOTECH_UNPROFITABLE: 0.80,
     DeclineReason.INSUFFICIENT_DATA: 0.95,
 }
 
@@ -268,6 +278,24 @@ def _check_declines(s: ClassificationSignals) -> _Decline | None:
                 f"pre-commercial signature: TTM revenue ${rev / 1e6:,.1f}M, {what}, "
                 f"public ~{years_public:.0f}y with negative operating cash flow in each of the last "
                 f"{len(recent_ocf)} years (rNPV is out of scope)",
+            )
+
+    # 6b. Commercial-stage but loss-making, R&D-driven drug developer (value sits in the pipeline).
+    if sic in DRUG_DEVELOPER_SICS and latest is not None and latest.revenue > 0:
+        recent = annual_income_statements(fin)[-BIOTECH_LOSS_LOOKBACK_YEARS:]
+        loss_years = sum(1 for r in recent if r.operating_income < 0)
+        rd_ratio = (latest.rd or 0.0) / latest.revenue
+        if (
+            latest.operating_income < 0
+            and loss_years >= BIOTECH_MIN_LOSS_YEARS
+            and rd_ratio >= BIOTECH_UNPROFITABLE_RD_TO_REVENUE_MIN
+        ):
+            return _Decline(
+                DeclineReason.BIOTECH_UNPROFITABLE,
+                f"loss-making drug developer (SIC {sic}): TTM operating margin "
+                f"{latest.operating_income / latest.revenue:.0%}, operating losses in {loss_years} of the last "
+                f"{len(recent)} fiscal years, R&D {rd_ratio:.0%} of revenue. Its value rests on the pipeline, "
+                "which needs a risk-adjusted NPV (rNPV) model; that is out of scope",
             )
 
     # 7. Insufficient history

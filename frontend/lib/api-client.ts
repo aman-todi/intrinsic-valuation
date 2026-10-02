@@ -116,6 +116,9 @@ export const api = {
     request<RunOut>(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
 
   getResult: (id: string) => request<RunResultOut>(`/api/runs/${encodeURIComponent(id)}/result`),
+
+  /** DELETE /api/me — the account, its runs and private downloads (409 while a build is running). */
+  deleteAccount: () => request<null>("/api/me", { method: "DELETE" }),
 };
 
 /**

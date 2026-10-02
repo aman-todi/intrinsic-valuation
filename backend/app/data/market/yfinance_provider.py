@@ -16,9 +16,15 @@ from typing import Any
 
 import yfinance as yf
 
-from app.data.market.base import MarketDataProvider, MarketDataUnavailable, PriceSnapshot
+from app.data.market.base import BetaEstimate, MarketDataProvider, MarketDataUnavailable, PriceSnapshot
 
 logger = logging.getLogger(__name__)
+
+BETA_INDEX = "^GSPC"  # S&P 500
+BETA_PERIOD = "5y"
+BETA_INTERVAL = "1mo"
+BETA_MIN_OBSERVATIONS = 36  # three years of monthly returns
+BLUME_WEIGHT = 0.67  # adjusted beta = 0.67 x raw + 0.33 x 1.0
 
 
 def _positive_float(value: Any) -> float | None:
@@ -64,6 +70,31 @@ class YFinanceProvider(MarketDataProvider):
             currency=str(currency) if currency else None,
         )
 
+    @staticmethod
+    def _beta_sync(ticker: str) -> BetaEstimate | None:
+        closes = yf.download(
+            [ticker, BETA_INDEX],
+            period=BETA_PERIOD,
+            interval=BETA_INTERVAL,
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+        )["Close"]
+        returns = closes[[ticker, BETA_INDEX]].pct_change().dropna()
+        return regression_beta(
+            returns[ticker].tolist(),
+            returns[BETA_INDEX].tolist(),
+            basis=f"{BETA_PERIOD} {'monthly' if BETA_INTERVAL == '1mo' else BETA_INTERVAL} returns vs the S&P 500",
+        )
+
+    async def get_beta(self, ticker: str) -> BetaEstimate | None:
+        ticker = ticker.strip().upper()
+        try:
+            return await asyncio.to_thread(self._beta_sync, ticker)
+        except Exception as exc:  # best effort: the industry beta is the fallback
+            logger.warning("beta regression failed for %s: %s", ticker, exc)
+            return None
+
     async def get_price_snapshot(self, ticker: str) -> PriceSnapshot:
         ticker = ticker.strip().upper()
         last_error: Exception | None = None
@@ -76,6 +107,31 @@ class YFinanceProvider(MarketDataProvider):
                 if attempt < self.max_attempts and self.retry_delay_seconds > 0:
                     await asyncio.sleep(self.retry_delay_seconds)
         raise MarketDataUnavailable(ticker, str(last_error)) from last_error
+
+
+def regression_beta(stock: list[float], market: list[float], *, basis: str) -> BetaEstimate | None:
+    """OLS beta of ``stock`` on ``market`` returns (same length, aligned), Blume-adjusted.
+
+    None with fewer than ``BETA_MIN_OBSERVATIONS`` usable pairs or a flat market series."""
+    pairs = [(s, m) for s, m in zip(stock, market, strict=False) if math.isfinite(s) and math.isfinite(m)]
+    n = len(pairs)
+    if n < BETA_MIN_OBSERVATIONS:
+        return None
+    ms = sum(s for s, _ in pairs) / n
+    mm = sum(m for _, m in pairs) / n
+    cov = sum((s - ms) * (m - mm) for s, m in pairs) / (n - 1)
+    var_m = sum((m - mm) ** 2 for _, m in pairs) / (n - 1)
+    var_s = sum((s - ms) ** 2 for s, _ in pairs) / (n - 1)
+    if var_m <= 0 or var_s <= 0:
+        return None
+    raw = cov / var_m
+    return BetaEstimate(
+        adjusted=BLUME_WEIGHT * raw + (1 - BLUME_WEIGHT),
+        raw=raw,
+        r_squared=cov * cov / (var_m * var_s),
+        observations=n,
+        basis=basis,
+    )
 
 
 def get_market_provider() -> MarketDataProvider:

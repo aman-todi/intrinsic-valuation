@@ -381,6 +381,7 @@ class ModelType(StrEnum):
 
 class DeclineReason(StrEnum):
     BIOTECH_PRECOMMERCIAL = "biotech_precommercial"
+    BIOTECH_UNPROFITABLE = "biotech_unprofitable"  # commercial-stage but loss-making, R&D-driven
     LIFE_INSURER = "life_insurer"
     SPAC_OR_TRUST = "spac_or_trust"
     MLP = "mlp"
@@ -513,6 +514,8 @@ class MarketSnapshot(BaseModel):
     market_cap: float
     risk_free_rate: float          # from FRED DGS10, as of run time
     industry_unlevered_beta: float # from Damodaran, by SIC-mapped industry
+    company_beta: float | None = None   # own beta: 5y monthly regression on the S&P 500, Blume-adjusted (0.67 raw + 0.33)
+    company_beta_note: str | None = None
     equity_risk_premium: float     # from Damodaran implied ERP dataset
 ```
 
@@ -791,6 +794,7 @@ No price caching, no fallback provider, no daily-movement robustness requirement
    - SIC in an MLP-heavy range **and** entity type is a partnership (`entityType` in submissions ≠ `"operating"` corp, or name contains "L.P."/"LP") → `MLP`.
    - SIC in metals-mining ranges (1000–1099, 1200–1299) → `MINING`.
    - **Biotech/pre-revenue signature**: TTM revenue < some small absolute threshold (e.g. <$50M) **and** R&D/revenue far exceeds 1 (or revenue is ~0) **and** the company has been public >2 years with sustained negative operating cash flow → `BIOTECH_PRECOMMERCIAL`. (Note: this checks the *financial signature*, not the SIC/pharma label — a profitable pharma major like Pfizer must NOT be caught here; it should fall through to FCFF.)
+   - **Unprofitable commercial-stage biotech**: drug-developer SIC (2833-2836, 8731) **and** a TTM operating loss **and** operating losses in ≥2 of the last 3 fiscal years **and** R&D ≥ 30% of revenue → `BIOTECH_UNPROFITABLE` (e.g. INSM, MRNA, IONS, SRPT). Its value sits in the pipeline (rNPV, out of scope). Profitable R&D-heavy biotech (VRTX, REGN, ALNY) and pharma (PFE, LLY) fall through to FCFF.
    - Fewer than 3 fiscal years of usable normalized data → `INSUFFICIENT_DATA`.
 2. **Model selection** (first match wins):
    - XBRL tags for `Deposits` + `InterestIncomeExpenseNet` present and material → `EXCESS_RETURN` (bank).
@@ -1285,6 +1289,7 @@ Reconnect-safe: the frontend passes `Last-Event-ID` or simply re-requests from `
 | `POST /api/runs/{id}/cancel` | Sets `cancel_requested`, publishes the Redis cancel signal (§8.3). |
 | `GET /api/runs/{id}/events` | SSE stream (§8.6). |
 | `GET /api/runs/{id}/result` | Once `COMPLETE`: the `ValuationResult` JSON + presigned S3 URLs for the `.xlsx` and `.pdf`, plus a **fresh** live price fetched at read time (not the cached one) so the UI can show current upside next to the cached fair value (§ pricing decision). |
+| `DELETE /api/me` | Self-service account deletion (`app/api/routes/account.py`): deletes the caller's private run artifacts (`runs/{id}/`), the `users` row (cascading to runs and events) and the Cognito user (`AdminDeleteUser`). `409` while a run is in a worker-owned state; `502` if only the Cognito step failed (retry-safe). The shared cache is kept. |
 | `GET /api/health` | Liveness/readiness for the compose healthcheck and deploy verification. No auth. |
 
 ### 9.2 Database connectivity (RDS)

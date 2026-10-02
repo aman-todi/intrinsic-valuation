@@ -26,7 +26,7 @@ Math (the Excel exporter reproduces exactly this; rates decimals, money raw USD)
                       (development_cost_adjustment positive = additional cost)
 
     Value bridge (ValueBridge.bridge) with the latest balance sheet:
-      cash      = cash_and_equivalents + short_term_investments
+      cash      = cash_and_equivalents + short_term_investments + long_term_investments
       non_operating = []
       debt = total_debt, lease = operating_lease_liability, preferred_equity,
       minority_interest, pension_deficit (None -> 0)
@@ -122,7 +122,7 @@ def _bridge_inputs(financials: NormalizedFinancials) -> dict[str, float]:
         raise ValuationError("no balance sheet available for the value bridge")
     bs = financials.balance_sheets[-1]
     return {
-        "cash": bs.cash_and_equivalents + bs.short_term_investments,
+        "cash": bs.cash_and_equivalents + bs.short_term_investments + bs.long_term_investments,
         "debt": bs.total_debt,
         "lease": bs.operating_lease_liability,
         "preferred": bs.preferred_equity,

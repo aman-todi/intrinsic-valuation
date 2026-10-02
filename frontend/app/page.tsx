@@ -69,7 +69,7 @@ function Home() {
         <CardHeader>
           <CardTitle>Supported models</CardTitle>
           <CardDescription>
-            Pre-revenue biotech, life insurers, SPACs/trusts/MLPs and miners are declined rather than forced into a
+            Pre-revenue and loss-making biotech, life insurers, SPACs/trusts/MLPs and miners are declined rather than forced into a
             DCF.
           </CardDescription>
         </CardHeader>

@@ -280,6 +280,18 @@ export function createHandlers(state: MockApiState): RequestHandler[] {
   return [
     http.get("*/api/health", () => HttpResponse.json({ status: "ok" })),
 
+    http.delete("*/api/me", () => {
+      const run = state.activeOrWaiting();
+      if (run && run.status !== "awaiting_confirm") {
+        return HttpResponse.json(
+          { detail: "A valuation is still being built. Cancel it (or let it finish), then delete your account." },
+          { status: 409 },
+        );
+      }
+      state.reset();
+      return new HttpResponse(null, { status: 204 });
+    }),
+
     http.get("*/api/runs/active", () => {
       const run = state.activeOrWaiting();
       return run ? HttpResponse.json(run) : new HttpResponse(null, { status: 204 });

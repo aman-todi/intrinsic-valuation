@@ -86,6 +86,13 @@ def _bridge_specs(ctx: BuildContext) -> list[InputSpec]:
             "short_term_investments", "Short-term investments", g("short_term_investments"), "money", src
         ),
         InputSpec(
+            "long_term_investments",
+            "Long-term investments (noncurrent marketable securities)",
+            g("long_term_investments"),
+            "money",
+            src,
+        ),
+        InputSpec(
             "non_operating_adjustments",
             "Non-operating adjustments (sum)",
             non_op,

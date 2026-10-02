@@ -173,3 +173,33 @@ async def test_propose_with_fallback_after_failure() -> None:
     )
     assert used and check_bounds(ModelType.FCFF, out) == []
     assert len(client.messages.calls) == MAX_REPAIR_ATTEMPTS
+
+
+def test_fallback_uses_the_company_beta_and_keeps_part_of_a_moat() -> None:
+    """With a company beta in the snapshot the fallback uses it (source historical_trend); without one
+    it relevers the industry beta. A ROIC far above WACC is half kept in the terminal ROIC."""
+    mk = market().model_copy(update={"company_beta": 0.85, "company_beta_note": "raw 0.78, test"})
+    out = deterministic_fallback(ModelType.FCFF, mature_financials(), mk, industry())
+    assert out.levered_beta.value == pytest.approx(0.85)
+    assert out.levered_beta.source == AssumptionSource.HISTORICAL_TREND
+    assert check_bounds(ModelType.FCFF, out) == []
+
+    no_beta = deterministic_fallback(ModelType.FCFF, mature_financials(), market(), industry())
+    assert no_beta.levered_beta.source == AssumptionSource.INDUSTRY_MEDIAN
+
+    from app.assumptions.historicals import compute_anchors
+    from app.assumptions.proposer import fcff_wacc
+
+    roic = compute_anchors(ModelType.FCFF, mature_financials(), mk).v("roic_latest")
+    wacc = fcff_wacc(out)
+    if roic is not None and roic > wacc:
+        assert wacc < out.terminal_roic.value <= min(roic, 0.40)
+
+
+def test_prompt_shows_the_company_beta() -> None:
+    mk = market().model_copy(update={"company_beta": 1.07, "company_beta_note": "raw 1.10, test"})
+    prompt = build_prompt(ModelType.FCFF, mature_financials(), mk, industry())
+    assert "Company beta (use this for levered_beta): 1.07" in prompt
+    assert "Company beta: not available" in build_prompt(
+        ModelType.FCFF, mature_financials(), market(), industry()
+    )

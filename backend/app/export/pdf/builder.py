@@ -101,7 +101,7 @@ def _sensitivity_table(result: ValuationResult) -> dict | None:
 def _bridge_rows(result: ValuationResult) -> list[dict]:
     r = result
     rows = [{"label": "Operating value", "value": fmt_money(r.operating_value), "total": True}]
-    rows.append({"label": "+ Cash and equivalents", "value": fmt_money(r.cash_and_equivalents)})
+    rows.append({"label": "+ Cash and investments", "value": fmt_money(r.cash_and_equivalents)})
     for a in r.non_operating_adjustments:
         rows.append({"label": f"+ {a.label}", "value": fmt_money(a.amount)})
     rows.append({"label": "Enterprise value", "value": fmt_money(r.enterprise_value), "total": True})

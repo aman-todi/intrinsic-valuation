@@ -60,7 +60,7 @@ from app.schemas.macro import DamodaranIndustryData
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v3"  # v3: data flags scoped to the historical window; v2: excess-return bounds text
+PROMPT_VERSION = "v4"  # v4: company beta, moat/asset-light/terminal-growth guidance; v3: window-scoped flags
 MAX_REPAIR_ATTEMPTS = 3
 MAX_TOKENS = 4096  # 17 fields x (value + <=240-char rationale + source) needs more than 2048
 RATIONALE_MAX = 240
@@ -129,13 +129,17 @@ _GROWTH_SEM = (
 _RF_SEM = "10-year risk-free rate, decimal. Use EXACTLY the given FRED value; source 'risk_free_rate'."
 _ERP_SEM = "Equity risk premium, decimal. Use EXACTLY the given Damodaran ERP; source 'industry_median'."
 _BETA_SEM = (
-    "Levered equity beta: industry unlevered beta relevered at the target mix, "
-    "beta_u x (1 + (1 - tax_rate) x D/E) where D/E = D/C / (1 - D/C)."
+    "Levered equity beta. Use the company's OWN beta from the market snapshot (Blume-adjusted regression "
+    "on the S&P 500) exactly, source 'historical_trend'. Only when no company beta is given: industry "
+    "unlevered beta relevered at the target mix, beta_u x (1 + (1 - tax_rate) x D/E), source 'industry_median'."
 )
 _TAX_SEM = "Normalized/marginal tax rate on operating income, decimal (0.21 = 21%), 0-0.5."
 _CONV_SEM = "Number of YEARS (1-10) over which the margin moves linearly from today's level to the target."
 _DC_SEM = "Target debt / (debt + equity) at market values, decimal 0-0.9."
-_TG_SEM = "Perpetual growth rate after the explicit forecast, decimal; must be <= risk_free_rate."
+_TG_SEM = (
+    "Perpetual growth rate after the explicit forecast, decimal; must be <= risk_free_rate. Long-run "
+    "nominal growth: about the risk-free rate minus 1-1.5%, typically 2-3.5%."
+)
 
 FIELD_SEMANTICS: dict[type[BaseModel], dict[str, str]] = {
     FCFFAssumptions: {
@@ -145,7 +149,9 @@ FIELD_SEMANTICS: dict[type[BaseModel], dict[str, str]] = {
         "tax_rate": _TAX_SEM,
         "sales_to_capital_ratio": (
             "Δrevenue / reinvestment: dollars of incremental revenue per dollar of net reinvestment "
-            "(capex - D&A + ΔNWC); reinvestment_t = Δrevenue_t / this ratio. Must be > 0."
+            "(capex - D&A + ΔNWC); reinvestment_t = Δrevenue_t / this ratio. Must be > 0. Prefer the "
+            "company's own history; when its historical net reinvestment is ~0 or negative (asset-light, "
+            "negative working capital) use at least its revenue / invested capital, not the industry median."
         ),
         "risk_free_rate": _RF_SEM,
         "equity_risk_premium": _ERP_SEM,
@@ -155,7 +161,9 @@ FIELD_SEMANTICS: dict[type[BaseModel], dict[str, str]] = {
         "terminal_growth_rate": _TG_SEM,
         "terminal_roic": (
             "Return on invested capital in perpetuity, decimal; terminal reinvestment rate = "
-            "terminal_growth_rate / terminal_roic. About WACC with no durable moat, higher with one."
+            "terminal_growth_rate / terminal_roic. About WACC with no durable moat. With a durable moat "
+            "(after-tax ROIC far above WACC for the whole window), keep it well above WACC: about halfway "
+            "between WACC and the latest ROIC is a reasonable default (bounded by the rules below)."
         ),
         "survival_probability": (
             "Probability the firm survives to deliver the projections, applied as a haircut to every "
@@ -184,7 +192,8 @@ FIELD_SEMANTICS: dict[type[BaseModel], dict[str, str]] = {
         },
         "terminal_roe": "Sustainable ROE in perpetuity, decimal; usually converges toward cost_of_equity.",
         "cost_of_equity": (
-            "rf + levered beta x ERP using the given risk-free rate and ERP, decimal (0.05-0.20)."
+            "rf + levered beta x ERP using the given risk-free rate and ERP, and the company's own beta "
+            "from the market snapshot when given (else the industry levered beta), decimal (0.05-0.20)."
         ),
         "book_value_growth_rate": (
             "Annual book value growth, decimal; must be about average ROE x (1 - payout_ratio)."
@@ -227,6 +236,11 @@ def _render_market(market: MarketSnapshot) -> str:
             f"- Risk-free rate (FRED DGS10): {market.risk_free_rate:.4f}",
             f"- Equity risk premium (Damodaran implied): {market.equity_risk_premium:.4f}",
             f"- Industry unlevered beta: {market.industry_unlevered_beta:.2f}",
+            (
+                f"- Company beta (use this for levered_beta): {market.company_beta:.2f} ({market.company_beta_note})"
+                if market.company_beta is not None
+                else "- Company beta: not available (relever the industry beta)"
+            ),
         ]
     )
 
@@ -733,8 +747,16 @@ def _pct(x: float) -> str:
     return f"{x * 100:.1f}%"
 
 
+TERMINAL_GROWTH_BELOW_RF = 0.015
+MOAT_RETAINED_SHARE = 0.5  # share of today's excess ROIC kept in perpetuity
+TERMINAL_ROIC_CAP = 0.40
+TERMINAL_GROWTH_FLOOR, TERMINAL_GROWTH_CAP = 0.02, 0.035
+
+
 def _terminal_growth(rf: float) -> float:
-    return _clamp(min(0.025, rf), 0.0, max(rf, 0.0))
+    """Long-run nominal growth: rf - 1.5%, within 2-3.5%, never above rf."""
+    g = _clamp(rf - TERMINAL_GROWTH_BELOW_RF, TERMINAL_GROWTH_FLOOR, TERMINAL_GROWTH_CAP)
+    return _clamp(g, 0.0, max(rf, 0.0))
 
 
 def _capital_structure(
@@ -749,17 +771,22 @@ def _capital_structure(
     dc, dc_src = _blend(a.v("market_debt_to_capital"), ind_dc, 0.5, 0.2)
     dc = _clamp(dc, 0.0, 0.6)
     beta_u = industry.unlevered_beta or market.industry_unlevered_beta
-    beta = _clamp(beta_u * (1 + (1 - tax) * dc / (1 - dc)), 0.5, 2.5)
+    if market.company_beta is not None:
+        beta = _clamp(market.company_beta, 0.3, 3.5)
+        beta_field = _af(beta, f"Company beta {beta:.2f} ({market.company_beta_note}).", S.HISTORICAL_TREND)
+    else:
+        beta = _clamp(beta_u * (1 + (1 - tax) * dc / (1 - dc)), 0.5, 2.5)
+        beta_field = _af(
+            beta,
+            f"{industry.industry_name} unlevered beta {beta_u:.2f} relevered at D/C {_pct(dc)}.",
+            S.INDUSTRY_MEDIAN,
+        )
     kd_hist = a.v("implied_pretax_cost_of_debt")
     kd = _clamp(kd_hist if kd_hist is not None else rf + 0.015, rf + 0.005, rf + 0.06)
     return {
         "risk_free_rate": _af(rf, f"FRED 10Y Treasury {_pct(rf)}.", S.RISK_FREE_RATE),
         "equity_risk_premium": _af(erp, f"Damodaran implied ERP {_pct(erp)}.", S.INDUSTRY_MEDIAN),
-        "levered_beta": _af(
-            beta,
-            f"{industry.industry_name} unlevered beta {beta_u:.2f} relevered at D/C {_pct(dc)}.",
-            S.INDUSTRY_MEDIAN,
-        ),
+        "levered_beta": beta_field,
         "pretax_cost_of_debt": _af(
             kd,
             "Interest expense / debt, bounded to rf + 0.5-6%."
@@ -790,7 +817,13 @@ def _fcff_fallback(
         margin = ind_margin if ind_margin is not None and ind_margin > 0 else 0.15
         margin, m_src = _clamp(margin, 0.05, 0.40), S.INDUSTRY_MEDIAN
     else:
-        margin, m_src = _blend(a.v("operating_margin_median"), industry.pretax_operating_margin, 0.7, 0.10)
+        med, latest = a.v("operating_margin_median"), a.v("operating_margin_latest")
+        hist = (
+            (med + latest) / 2
+            if med is not None and latest is not None
+            else (med if med is not None else latest)
+        )
+        margin, m_src = _blend(hist, industry.pretax_operating_margin, 0.7, 0.10)
         margin = _clamp(margin, -0.20, 0.60)
     s2c_hist = a.v("sales_to_capital_historical") or a.v("revenue_to_invested_capital")
     s2c, s2c_src = _blend(s2c_hist, industry.sales_to_capital, 0.5, 1.5)
@@ -819,7 +852,7 @@ def _fcff_fallback(
         "sales_to_capital_ratio": _af(s2c, f"Sales-to-capital {s2c:.2f}x (history/industry blend).", s2c_src),
         **cap,
         "terminal_growth_rate": _af(
-            g_t, f"Terminal growth {_pct(g_t)}, capped at the risk-free rate.", S.RISK_FREE_RATE
+            g_t, f"Terminal growth {_pct(g_t)}: risk-free rate - 1.5%, kept within 2-3.5%.", S.RISK_FREE_RATE
         ),
         "terminal_roic": _af(0.0, "", S.INDUSTRY_MEDIAN),  # filled below
         "survival_probability": _af(
@@ -838,9 +871,18 @@ def _fcff_fallback(
             g_t, f"Terminal growth {_pct(g_t)}, kept 1% below WACC.", S.RISK_FREE_RATE
         )
     roic = max(w, g_t + 0.02, 0.05)
-    p.terminal_roic = _af(
-        roic, f"Terminal ROIC {_pct(roic)}: excess returns fade to about WACC.", S.INDUSTRY_MEDIAN
-    )
+    latest_roic = a.v("roic_latest")
+    if latest_roic is not None and latest_roic > roic:  # durable moat: keep half the excess return
+        roic = min(roic + MOAT_RETAINED_SHARE * (latest_roic - roic), TERMINAL_ROIC_CAP)
+        p.terminal_roic = _af(
+            roic,
+            f"Terminal ROIC {_pct(roic)}: halfway between WACC and today's ROIC {_pct(latest_roic)}.",
+            S.HISTORICAL_TREND,
+        )
+    else:
+        p.terminal_roic = _af(
+            roic, f"Terminal ROIC {_pct(roic)}: excess returns fade to about WACC.", S.INDUSTRY_MEDIAN
+        )
     return p
 
 
@@ -880,7 +922,11 @@ def _excess_return_fallback(
     a: Anchors, market: MarketSnapshot, industry: DamodaranIndustryData
 ) -> ExcessReturnAssumptions:
     rf, erp = market.risk_free_rate, market.equity_risk_premium
-    beta = industry.levered_beta if industry.levered_beta is not None else 1.0
+    if market.company_beta is not None:
+        beta, beta_src = _clamp(market.company_beta, 0.3, 3.5), S.HISTORICAL_TREND
+    else:
+        beta = industry.levered_beta if industry.levered_beta is not None else 1.0
+        beta_src = S.INDUSTRY_MEDIAN
     ke = _clamp(rf + beta * erp, 0.06, 0.15)
     roe_hist = a.v("roe_latest") if a.v("roe_latest") is not None else a.v("roe_median")
     r0 = _clamp(roe_hist if roe_hist is not None else 0.10, -0.05, 0.25)
@@ -899,7 +945,7 @@ def _excess_return_fallback(
         },
         terminal_roe=_af(t_roe, "Midpoint of historical median ROE and cost of equity.", S.HISTORICAL_TREND),
         cost_of_equity=_af(
-            ke, f"rf {_pct(rf)} + beta {beta:.2f} x ERP {_pct(erp)}, bounded 6-15%.", S.INDUSTRY_MEDIAN
+            ke, f"rf {_pct(rf)} + beta {beta:.2f} x ERP {_pct(erp)}, bounded 6-15%.", beta_src
         ),
         book_value_growth_rate=_af(bvg, "Average ROE x (1 - payout ratio).", S.HISTORICAL_TREND),
         payout_ratio=_af(

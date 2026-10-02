@@ -55,6 +55,12 @@ data "aws_iam_policy_document" "instance" {
       "arn:${local.partition}:ssm:${local.region}:${local.account_id}:parameter${local.ssm_prefix}/*",
     ]
   }
+  # DELETE /api/me removes the caller's sign-in identity (only this pool, only deletion).
+  statement {
+    sid       = "DeleteOwnCognitoUser"
+    actions   = ["cognito-idp:AdminDeleteUser"]
+    resources = [aws_cognito_user_pool.main.arn]
+  }
   # SecureStrings use the AWS-managed aws/ssm key; decrypt only through SSM in this region.
   statement {
     sid       = "DecryptSecureStrings"

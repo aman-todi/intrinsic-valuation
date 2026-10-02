@@ -40,7 +40,7 @@ OPERATING VALUE AND BRIDGE
     operating_value = sum(segment values) + corporate_overhead_capitalized.value
                       (normally negative).
     Bridge exactly like FCFF, from ``bridge_inputs(financials)`` on the CONSOLIDATED data:
-        cash = cash_and_equivalents + short_term_investments (latest balance sheet)
+        cash = cash_and_equivalents + short_term_investments + long_term_investments (latest)
         non_operating_adjustments = []
         EV = operating_value + cash
         equity = EV - total_debt - operating_lease_liability - preferred_equity

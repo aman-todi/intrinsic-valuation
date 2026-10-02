@@ -17,6 +17,16 @@ class PriceSnapshot(BaseModel):
     currency: str | None = None
 
 
+class BetaEstimate(BaseModel):
+    """The company's own equity beta from a regression of its returns on the market's."""
+
+    adjusted: float  # Blume-adjusted: 0.67 x raw + 0.33 (shrinks the noisy estimate toward 1)
+    raw: float
+    r_squared: float
+    observations: int
+    basis: str  # e.g. "5y monthly returns vs the S&P 500"
+
+
 class MarketDataUnavailable(Exception):
     """A live price could not be fetched (after one retry).
 
@@ -32,3 +42,7 @@ class MarketDataUnavailable(Exception):
 class MarketDataProvider(ABC):
     @abstractmethod
     async def get_price_snapshot(self, ticker: str) -> PriceSnapshot: ...
+
+    async def get_beta(self, ticker: str) -> BetaEstimate | None:
+        """Best effort: the company's own beta, or None (callers fall back to the industry beta)."""
+        return None

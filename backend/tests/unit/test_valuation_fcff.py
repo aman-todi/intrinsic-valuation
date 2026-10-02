@@ -246,3 +246,24 @@ def test_sensitivity_grid():
         r=wacc(a) - 0.01,
     )
     assert grid[4].value_per_share == pytest.approx((ref["operating_value"] + 150 - 375) / 100, rel=REL)
+
+
+def test_long_term_investments_are_added_in_the_bridge():
+    """Noncurrent marketable securities are non-operating cash-like assets: +X of them adds exactly X to
+    enterprise and equity value (FCFF bridge)."""
+    from app.valuation.fcff import bridge_inputs
+    from tests.fixtures.edgar import load_normalized
+
+    fin = load_normalized("AAPL")
+    bs = fin.balance_sheets[-1]
+    more = fin.model_copy(
+        update={
+            "balance_sheets": [
+                *fin.balance_sheets[:-1],
+                bs.model_copy(update={"long_term_investments": 50e9}),
+            ]
+        }
+    )
+    assert bridge_inputs(more).cash - bridge_inputs(fin).cash == pytest.approx(
+        50e9 - bs.long_term_investments
+    )

@@ -16,6 +16,7 @@ class ModelType(StrEnum):
 
 class DeclineReason(StrEnum):
     BIOTECH_PRECOMMERCIAL = "biotech_precommercial"
+    BIOTECH_UNPROFITABLE = "biotech_unprofitable"  # commercial-stage but loss-making, R&D-driven
     LIFE_INSURER = "life_insurer"
     SPAC_OR_TRUST = "spac_or_trust"
     MLP = "mlp"

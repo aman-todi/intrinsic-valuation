@@ -70,8 +70,8 @@ def _operating_bridge(ctx: BuildContext, lines: _Lines, op: E) -> None:
     op_n = ctx.define("operating_value", lines.add("Operating value", op, "money", fmt=f.money_bold))
     lines.sw.text(lines.row - 1, 2, "operating_value", f.note)
     cash = lines.add(
-        "+ Cash and short-term investments",
-        n("cash_and_equivalents") + n("short_term_investments"),
+        "+ Cash and investments",
+        n("cash_and_equivalents") + n("short_term_investments") + n("long_term_investments"),
         name="cash_and_investments",
     )
     lines.add("+ Non-operating adjustments", n("non_operating_adjustments"))

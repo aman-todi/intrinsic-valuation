@@ -28,6 +28,9 @@ class BalanceSheetLine(BaseModel):
     period: FiscalPeriod
     cash_and_equivalents: float
     short_term_investments: float
+    # Noncurrent marketable securities / long-term investments: non-operating, added in the equity bridge
+    # of operating companies (never for banks/insurers, whose portfolio is the business).
+    long_term_investments: float = 0.0
     total_debt: float  # incl. current + long-term + finance leases
     operating_lease_liability: float
     total_equity: float
@@ -122,3 +125,6 @@ class MarketSnapshot(BaseModel):
     risk_free_rate: float  # from FRED DGS10, as of run time
     industry_unlevered_beta: float  # from Damodaran, by SIC-mapped industry
     equity_risk_premium: float  # from Damodaran implied ERP dataset
+    # The company's own beta (Blume-adjusted regression on the S&P 500); None -> use the industry beta.
+    company_beta: float | None = None
+    company_beta_note: str | None = None  # "raw 1.10, R² 0.52, 60 obs, 5y monthly returns vs the S&P 500"

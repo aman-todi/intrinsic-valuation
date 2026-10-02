@@ -393,7 +393,21 @@ async def load_market(deps: JobDeps, ticker: str, sic_code: str | None) -> Marke
         await get_risk_free_rate(deps.fred_client, api_key="")
         raise AssertionError("unreachable")  # pragma: no cover
     industry = await damodaran.get_industry_data(sic_code)  # memoized; no extra I/O
-    return MarketData(snapshot=snapshot, industry=industry, flags=flags)
+    snapshot, beta_flags = await with_company_beta(deps, snapshot)
+    return MarketData(snapshot=snapshot, industry=industry, flags=[*flags, *beta_flags])
+
+
+async def with_company_beta(deps: JobDeps, snapshot: MarketSnapshot) -> tuple[MarketSnapshot, list[str]]:
+    """Attach the company's own (Blume-adjusted regression) beta. Best effort: without one, the
+    proposal relevers the industry beta and the result says so."""
+    est = await deps.market_provider.get_beta(snapshot.ticker)
+    if est is None:
+        return snapshot, ["company beta unavailable (under 3 years of price history?); industry beta used"]
+    note = (
+        f"adjusted 0.67 x raw + 0.33; raw {est.raw:.2f}, R\u00b2 {est.r_squared:.2f}, "
+        f"{est.observations} obs, {est.basis}"
+    )
+    return snapshot.model_copy(update={"company_beta": est.adjusted, "company_beta_note": note}), []
 
 
 def parse_as_of(value: str) -> datetime:

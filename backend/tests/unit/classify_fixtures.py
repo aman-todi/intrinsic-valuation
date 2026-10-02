@@ -396,6 +396,42 @@ def biotech() -> ClassificationSignals:
     )
 
 
+def commercial_biotech() -> ClassificationSignals:
+    """INSM-like: real product revenue, but operating losses every year and R&D ~ revenue."""
+    revenues = [250 * M, 300 * M, 360 * M, 450 * M, 600 * M, 900 * M]
+    fin = make_financials(
+        "CBIO",
+        revenues=revenues,
+        op_margins=[-1.8, -2.0, -2.2, -2.3, -2.0, -0.7],
+        rd_ratio=0.8,
+        total_equity=[1.5 * B, 1.2 * B, 1.0 * B, 0.9 * B, 0.8 * B, 0.7 * B],
+    )
+    return make_signals(
+        "CBIO",
+        "Commercial Biotherapeutics, Inc.",
+        "2834",
+        "Pharmaceutical Preparations",
+        15 * B,
+        fin,
+        years_public=25.0,
+        ocf=(-400 * M, -500 * M, -600 * M, -700 * M, -650 * M, -500 * M),
+    )
+
+
+def profitable_rd_heavy_biotech() -> ClassificationSignals:
+    """VRTX/REGN-like: same SIC and R&D intensity, but profitable -> modelled, not declined."""
+    fin = make_financials(
+        "PBIO",
+        revenues=[6 * B, 7 * B, 8 * B, 9 * B, 10 * B, 11 * B],
+        op_margins=[0.30, 0.32, 0.35, 0.33, 0.36, 0.38],
+        rd_ratio=0.35,
+        total_equity=10 * B,
+    )
+    return make_signals(
+        "PBIO", "Profitable Biologics, Inc.", "2834", "Pharmaceutical Preparations", 100 * B, fin
+    )
+
+
 def ipo_two_years() -> ClassificationSignals:
     fin = make_financials(
         "NEWCO",
@@ -577,6 +613,8 @@ FIXTURES: dict[str, tuple[Callable[[], ClassificationSignals], Expected]] = {
     "PFE": (pfe, Expected(model=ModelType.FCFF)),
     "SNOWL": (snow, Expected(model=ModelType.FCFF, early_stage=True)),
     "PREB": (biotech, Expected(decline=DeclineReason.BIOTECH_PRECOMMERCIAL)),
+    "CBIO": (commercial_biotech, Expected(decline=DeclineReason.BIOTECH_UNPROFITABLE)),
+    "PBIO": (profitable_rd_heavy_biotech, Expected(model=ModelType.FCFF)),
     "NEWCO": (ipo_two_years, Expected(decline=DeclineReason.INSUFFICIENT_DATA)),
     "TSMX": (foreign_20f, Expected(decline=DeclineReason.NON_10K_FILER)),
     "MET": (met, Expected(decline=DeclineReason.LIFE_INSURER)),

@@ -23,7 +23,7 @@ Defined names (workbook-global):
                   ``seg{i}_<field>``, ``seg{i}_ev_ebitda_multiple``, ``seg{i}_segment_ebitda_margin``,
                   consolidated cross-check ``cons_<field>``
     inputs        ``market_price``, ``diluted_shares``, ``cash_and_equivalents``, ``short_term_investments``,
-                  ``non_operating_adjustments``, ``total_debt``, ``operating_lease_liability``,
+                  ``long_term_investments``, ``non_operating_adjustments``, ``total_debt``, ``operating_lease_liability``,
                   ``preferred_equity``, ``minority_interest``, ``pension_deficit``, ``base_revenue``,
                   ``base_operating_income``, ``base_net_income``, ``base_d_and_a``, ``book_equity``,
                   ``historical_sales_to_capital`` (FCFE, engine-derived), ``book_total_equity`` (ER),

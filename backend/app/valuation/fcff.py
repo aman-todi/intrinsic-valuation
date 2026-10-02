@@ -44,7 +44,7 @@ FCFF (``FCFFValuator``, ``project_fcff``)
         PV(TV) = TV * DF_10
         operating_value = sum(PV_1..PV_10) + PV(TV)
     Bridge (``ValueBridge.bridge``, latest ``balance_sheets`` row):
-        cash = cash_and_equivalents + short_term_investments
+        cash = cash_and_equivalents + short_term_investments + long_term_investments
         non_operating_adjustments = []   (best-effort: no equity-method stakes,
                                            NOLs or excess-cash splits are inferred yet)
         EV = operating_value + cash
@@ -350,7 +350,7 @@ def bridge_inputs(financials: NormalizedFinancials) -> BridgeInputs:
     if shares <= 0:
         raise ValuationError("diluted shares must be positive")
     return BridgeInputs(
-        cash=bs.cash_and_equivalents + bs.short_term_investments,
+        cash=bs.cash_and_equivalents + bs.short_term_investments + bs.long_term_investments,
         total_debt=bs.total_debt,
         operating_lease_liability=bs.operating_lease_liability,
         preferred_equity=bs.preferred_equity,

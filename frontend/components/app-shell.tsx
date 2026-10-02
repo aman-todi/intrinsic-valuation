@@ -10,8 +10,8 @@ import Link from "next/link";
 import * as React from "react";
 import { AuthGate, useAuth } from "@/components/auth-provider";
 import { useActiveRun } from "@/components/active-run-guard";
+import { SettingsMenu } from "@/components/settings-menu";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 
 interface AppLockContextValue {
   locked: boolean;
@@ -52,7 +52,7 @@ export function useAppLocked(): boolean {
 }
 
 function Header() {
-  const { user, devBypass, signOut } = useAuth();
+  const { user, devBypass } = useAuth();
   const { locked } = useActiveRun();
 
   return (
@@ -86,11 +86,7 @@ function Header() {
             </Badge>
           )}
           {user && <span className="hidden text-muted-foreground sm:inline">{user.email}</span>}
-          {user && !devBypass && (
-            <Button variant="ghost" size="sm" onClick={() => void signOut()}>
-              Sign out
-            </Button>
-          )}
+          <SettingsMenu />
         </div>
       </div>
     </header>

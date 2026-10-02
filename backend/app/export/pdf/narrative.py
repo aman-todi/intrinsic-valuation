@@ -69,7 +69,7 @@ def _key_facts(result: ValuationResult, company_name: str) -> list[str]:
         facts += [
             f"Operating value: {fmt_money(r.operating_value)}",
             f"Enterprise value: {fmt_money(r.enterprise_value)}",
-            f"Cash and equivalents: {fmt_money(r.cash_and_equivalents)}",
+            f"Cash and investments: {fmt_money(r.cash_and_equivalents)}",
             f"Total debt: {fmt_money(r.total_debt)}",
         ]
     if r.discount_rate is not None:
@@ -278,7 +278,7 @@ def fallback_narrative(
             f"The model derives an operating value of {fmt_money(r.operating_value)} and an enterprise "
             f"value of {fmt_money(r.enterprise_value)} for {company_name}, based on "
             f"{r.historical_window_years} years of reported financials from SEC filings. Against "
-            f"{fmt_money(r.total_debt)} of debt and {fmt_money(r.cash_and_equivalents)} of cash, this "
+            f"{fmt_money(r.total_debt)} of debt and {fmt_money(r.cash_and_equivalents)} of cash and investments, this "
             f"implies equity value of {fmt_money(r.equity_value)}."
         )
 

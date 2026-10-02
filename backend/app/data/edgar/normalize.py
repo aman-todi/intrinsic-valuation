@@ -111,6 +111,12 @@ TAG_MAP: dict[str, tuple[str, ...]] = {
         "Cash",
         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
     ),
+    "long_term_investments": (
+        "MarketableSecuritiesNoncurrent",
+        "LongTermInvestments",
+        "AvailableForSaleSecuritiesDebtSecuritiesNoncurrent",
+        "OtherLongTermInvestments",
+    ),
     "short_term_investments": (
         "ShortTermInvestments",
         "MarketableSecuritiesCurrent",
@@ -893,6 +899,7 @@ def _total_debt(r: _Resolver) -> float:
 def _balance_sheet(r: _Resolver) -> BalanceSheetLine:
     cash = r.default("cash_and_equivalents", r.instant("cash"))
     sti = r.default("short_term_investments", r.instant("short_term_investments"))
+    lti = r.instant("long_term_investments") or 0.0  # absence is normal: no flag
     total_debt = _total_debt(r)
 
     oll = r.instant("operating_lease_total")
@@ -928,6 +935,7 @@ def _balance_sheet(r: _Resolver) -> BalanceSheetLine:
         period=r.v.period,
         cash_and_equivalents=cash,
         short_term_investments=sti,
+        long_term_investments=lti,
         total_debt=total_debt,
         operating_lease_liability=oll,
         total_equity=equity,
